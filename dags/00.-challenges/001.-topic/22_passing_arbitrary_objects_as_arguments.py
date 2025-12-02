@@ -9,6 +9,9 @@ Python tiene **dataclasses** perfectas para esto: defines la estructura de tus d
 tipadas, y TaskFlow las serializa/deserializa automáticamente. Es como pasar objetos entre funciones,
 pero las funciones están en tareas distribuidas.
 
+**NOTA**: Airflow 3.x tiene un bug conocido con dataclasses en template rendering. Como workaround,
+usaremos dicts tipados con TypedDict hasta que se resuelva el issue.
+
 **IMPORTANTE: Todas las tareas en este challenge usan PythonOperator (@task)** porque involucran:
 - Procesamiento de objetos Python complejos
 - Validaciones y transformaciones de datos
@@ -20,9 +23,8 @@ No uses BashOperator para lógica compleja. Reserva bash para comandos shell sim
 **El pipeline de ML completo (config → data → train → evaluate → deploy):**
 
 Crea el DAG `passing_objects_challenge` con:
-- 4 dataclasses: `ModelConfig`, `DatasetStats`, `TrainedModel`, `EvaluationMetrics`
-- 9 tareas @task que pasen estos objetos entre sí
-- Branching basado en métricas de evaluación
+- Diccionarios estructurados para: ModelConfig, DatasetStats, TrainedModel, EvaluationMetrics
+- 5 tareas @task que pasen estos objetos entre sí
 - Reporte consolidando TODOS los objetos
 
 **Configuración técnica:**
@@ -35,7 +37,6 @@ Crea el DAG `passing_objects_challenge` con:
 """
 
 import datetime
-from dataclasses import dataclass
 
 from airflow.sdk import DAG, task
 
