@@ -155,4 +155,80 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Define la config y genera los DAGs en un loop
+# Solución del challenge
+
+# Configuración de tablas (normalmente vendría de archivo/DB/API)
+TABLE_CONFIG = [
+    # Dimension tables
+    {'name': 'customers', 'type': 'dimension', 'owner': 'crm_team'},
+    {'name': 'products', 'type': 'dimension', 'owner': 'product_team'},
+    {'name': 'locations', 'type': 'dimension', 'owner': 'ops_team'},
+    
+    # Fact tables
+    {'name': 'orders', 'type': 'fact', 'owner': 'sales_team'},
+    {'name': 'payments', 'type': 'fact', 'owner': 'finance_team'},
+    {'name': 'shipments', 'type': 'fact', 'owner': 'logistics_team'},
+    {'name': 'returns', 'type': 'fact', 'owner': 'support_team'},
+    
+    # Staging tables
+    {'name': 'raw_web_events', 'type': 'staging', 'owner': 'analytics_team'},
+    {'name': 'raw_api_logs', 'type': 'staging', 'owner': 'engineering_team'},
+    {'name': 'raw_mobile_events', 'type': 'staging', 'owner': 'mobile_team'},
+]
+
+# Configuración por tipo de tabla
+TYPE_CONFIG = {
+    'dimension': {
+        'schedule': '@daily',
+        'checks': ['row_count', 'uniqueness', 'nulls']
+    },
+    'fact': {
+        'schedule': '@hourly',
+        'checks': ['row_count', 'freshness', 'foreign_keys', 'aggregations']
+    },
+    'staging': {
+        'schedule': '*/30 * * * *',
+        'checks': ['row_count', 'schema_validation']
+    }
+}
+
+# Generar un DAG por cada tabla
+for table in TABLE_CONFIG:
+    table_name = table['name']
+    table_type = table['type']
+    owner = table['owner']
+    
+    config = TYPE_CONFIG[table_type]
+    dag_id = f"data_quality_{table_type}_{table_name}"
+    
+    with DAG(
+        dag_id=dag_id,
+        start_date=datetime.datetime(2024, 1, 1),
+        schedule=config['schedule'],
+        catchup=False,
+        tags=['challenge', 'dynamic_dags', table_type, table_name],
+    ) as dag:
+        
+        start = EmptyOperator(task_id='start')
+        
+        # Crear tareas dinámicamente según el tipo de tabla
+        check_tasks = []
+        for check in config['checks']:
+            task = BashOperator(
+                task_id=f'check_{check}',
+                bash_command=f'echo "Running {check} check on {table_name}"',
+            )
+            check_tasks.append(task)
+        
+        notify = BashOperator(
+            task_id='notify_owner',
+            bash_command=f'echo "Notifying {owner} about {table_name}"',
+        )
+        
+        end = EmptyOperator(task_id='end')
+        
+        # Dependencies
+        start >> check_tasks >> notify >> end
+    
+    # Registrar el DAG en globals() para que Airflow lo detecte
+    globals()[dag_id] = dag

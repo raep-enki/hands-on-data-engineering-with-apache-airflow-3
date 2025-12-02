@@ -82,4 +82,68 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.providers.standard.operators.latest_only import LatestOnlyOperator
 
-# TODO: Implementa el pattern latest-only para optimizar backfills
+# Solución del challenge
+with DAG(
+    dag_id='real_time_dashboard_update',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='0 * * * *',
+    catchup=True,
+    tags=['challenge', 'latest_only'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # Path 1: Tareas que SIEMPRE corren (cada hora perdida)
+    ingest_hourly_data = BashOperator(
+        task_id='ingest_hourly_data',
+        bash_command='echo "Ingesting data for {{ logical_date }}"',
+    )
+    
+    validate_hourly_data = BashOperator(
+        task_id='validate_hourly_data',
+        bash_command='echo "Validating data for {{ ds }}"',
+    )
+    
+    calculate_hourly_metrics = BashOperator(
+        task_id='calculate_hourly_metrics',
+        bash_command='echo "Calculating metrics for {{ ds }} {{ logical_date.hour }}:00"',
+    )
+    
+    update_realtime_dashboard = BashOperator(
+        task_id='update_realtime_dashboard',
+        bash_command='echo "Updating dashboard for hour {{ logical_date }}"',
+    )
+    
+    # Path 2: Tareas que SOLO corren en el run más reciente
+    check_latest_only = LatestOnlyOperator(task_id='check_latest_only')
+    
+    calculate_7day_trends = BashOperator(
+        task_id='calculate_7day_trends',
+        bash_command='echo "Calculating 7-day trends (latest only)"',
+    )
+    
+    calculate_30day_aggregations = BashOperator(
+        task_id='calculate_30day_aggregations',
+        bash_command='echo "Calculating 30-day aggregations (latest only)"',
+    )
+    
+    rebuild_analytics_tables = BashOperator(
+        task_id='rebuild_analytics_tables',
+        bash_command='echo "Rebuilding analytics tables (latest only)"',
+    )
+    
+    send_executive_report = BashOperator(
+        task_id='send_executive_report',
+        bash_command='echo "Sending executive report (latest only)"',
+    )
+    
+    end = EmptyOperator(task_id='end', trigger_rule='none_failed_min_one_success')
+    
+    # Dependencies
+    # Path 1: Siempre corre
+    start >> ingest_hourly_data >> validate_hourly_data >> calculate_hourly_metrics
+    calculate_hourly_metrics >> update_realtime_dashboard >> end
+    
+    # Path 2: Solo latest
+    start >> check_latest_only >> calculate_7day_trends >> calculate_30day_aggregations
+    calculate_30day_aggregations >> rebuild_analytics_tables >> send_executive_report >> end

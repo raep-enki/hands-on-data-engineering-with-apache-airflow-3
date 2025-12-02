@@ -189,4 +189,112 @@ import datetime
 
 from airflow.sdk import DAG, task
 
-# TODO: Usa @task con .expand() para dynamic task mapping
+# Solución del challenge
+
+@task(task_id='list_data_sources')
+def get_sources():
+    """Genera lista dinámica de fuentes"""
+    sources = [
+        {'type': 's3', 'bucket': 'data-lake-raw', 'prefix': 'sales/'},
+        {'type': 's3', 'bucket': 'data-lake-raw', 'prefix': 'marketing/'},
+        {'type': 'gcs', 'bucket': 'analytics-data', 'prefix': 'events/'},
+        {'type': 'azure', 'container': 'logs', 'prefix': 'app-logs/'},
+        {'type': 'ftp', 'host': 'ftp.partner.com', 'path': '/data/'},
+        {'type': 'sftp', 'host': 'sftp.vendor.com', 'path': '/exports/'}
+    ]
+    print(f"Found {len(sources)} data sources to process")
+    return sources
+
+@task(task_id='extract_from_source')
+def extract(source):
+    """Extrae de una fuente - SE MAPEA (corre por cada fuente)"""
+    source_type = source['type']
+    
+    if source_type == 's3':
+        location = f"s3://{source['bucket']}/{source['prefix']}"
+    elif source_type == 'gcs':
+        location = f"gs://{source['bucket']}/{source['prefix']}"
+    elif source_type == 'azure':
+        location = f"azure://{source['container']}/{source['prefix']}"
+    elif source_type in ['ftp', 'sftp']:
+        location = f"{source_type}://{source['host']}{source['path']}"
+    else:
+        location = "unknown"
+    
+    print(f"Extracting from {location}")
+    
+    # Simulación: diferentes cantidades por fuente
+    records = len(location) * 100  # Simulación
+    
+    return {
+        'source': location,
+        'records': records,
+        'type': source_type
+    }
+
+@task(task_id='validate_extracted_data')
+def validate(extraction_result):
+    """Valida cada extracción - TAMBIÉN SE MAPEA"""
+    source = extraction_result['source']
+    records = extraction_result['records']
+    
+    print(f"Validating {records} records from {source}")
+    
+    # Validaciones básicas
+    is_valid = records > 0
+    
+    return {
+        'source': source,
+        'records': records,
+        'valid': is_valid
+    }
+
+@task(task_id='consolidate_results')
+def consolidate(validation_results):
+    """Consolida todos los resultados - recibe LISTA de resultados"""
+    print(f"Consolidating {len(validation_results)} sources")
+    
+    total_records = sum(r['records'] for r in validation_results)
+    valid_sources = sum(1 for r in validation_results if r['valid'])
+    
+    print(f"Total records: {total_records}")
+    print(f"Valid sources: {valid_sources}/{len(validation_results)}")
+    
+    return {
+        'total_sources': len(validation_results),
+        'valid_sources': valid_sources,
+        'total_records': total_records
+    }
+
+@task(task_id='generate_summary')
+def generate_summary(consolidation):
+    """Genera reporte final"""
+    print("=== DATA EXTRACTION SUMMARY ===")
+    print(f"Sources processed: {consolidation['total_sources']}")
+    print(f"Valid sources: {consolidation['valid_sources']}")
+    print(f"Total records: {consolidation['total_records']}")
+    
+    return {'status': 'completed', 'summary': consolidation}
+
+with DAG(
+    dag_id='simple_mapping_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'simple_mapping'],
+) as dag:
+    
+    # 1. Generar lista de fuentes
+    sources = get_sources()
+    
+    # 2. Extraer de cada fuente EN PARALELO (.expand())
+    extractions = extract.expand(source=sources)
+    
+    # 3. Validar cada extracción EN PARALELO (.expand())
+    validations = validate.expand(extraction_result=extractions)
+    
+    # 4. Consolidar todos los resultados (recibe lista)
+    consolidated = consolidate(validations)
+    
+    # 5. Generar resumen final
+    summary = generate_summary(consolidated)

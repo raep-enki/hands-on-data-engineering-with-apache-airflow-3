@@ -70,4 +70,127 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Diseña el flujo con dependencias complejas
+# Solución del challenge
+with DAG(
+    dag_id='task_relationships_challenge',
+    start_date=datetime.datetime.now() - datetime.timedelta(days=7),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'relationships'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # 4 validaciones paralelas
+    validate_orders_file = BashOperator(task_id='validate_orders_file', bash_command='echo "Validating orders.csv"')
+    validate_customers_file = BashOperator(task_id='validate_customers_file', bash_command='echo "Validating customers.csv"')
+    validate_products_file = BashOperator(task_id='validate_products_file', bash_command='echo "Validating products.csv"')
+    validate_inventory_file = BashOperator(task_id='validate_inventory_file', bash_command='echo "Validating inventory.csv"')
+    
+    # Extracciones paralelas (dependencia 1:1 con validaciones)
+    extract_orders = BashOperator(task_id='extract_orders', bash_command='echo "Extracting orders to JSON"')
+    extract_customers = BashOperator(task_id='extract_customers', bash_command='echo "Extracting customers to JSON"')
+    extract_products = BashOperator(task_id='extract_products', bash_command='echo "Extracting products to JSON"')
+    extract_inventory = BashOperator(task_id='extract_inventory', bash_command='echo "Extracting inventory to JSON"')
+    
+    # Quality checks paralelos (dependencia 1:1 con extracciones)
+    quality_check_orders = BashOperator(task_id='quality_check_orders', bash_command='echo "QC: Orders validated"')
+    quality_check_customers = BashOperator(task_id='quality_check_customers', bash_command='echo "QC: Customers validated"')
+    quality_check_products = BashOperator(task_id='quality_check_products', bash_command='echo "QC: Products validated"')
+    quality_check_inventory = BashOperator(task_id='quality_check_inventory', bash_command='echo "QC: Inventory validated"')
+    
+    # Enriquecimiento (dependencias cruzadas N:1)
+    enrich_orders_with_customer_data = BashOperator(
+        task_id='enrich_orders_with_customer_data',
+        bash_command='echo "Enriching orders with customer data"'
+    )
+    enrich_products_with_inventory = BashOperator(
+        task_id='enrich_products_with_inventory',
+        bash_command='echo "Enriching products with inventory data"'
+    )
+    
+    # Cálculos (dependencias múltiples)
+    calculate_pricing = BashOperator(
+        task_id='calculate_pricing',
+        bash_command='echo "Calculating pricing with discounts and availability"'
+    )
+    calculate_shipping = BashOperator(
+        task_id='calculate_shipping',
+        bash_command='echo "Calculating shipping costs"'
+    )
+    calculate_taxes = BashOperator(
+        task_id='calculate_taxes',
+        bash_command='echo "Calculating taxes"'
+    )
+    
+    # Agregación (dependencias N:1)
+    aggregate_order_totals = BashOperator(
+        task_id='aggregate_order_totals',
+        bash_command='echo "Aggregating order totals"'
+    )
+    
+    # Generación de reportes
+    generate_invoice = BashOperator(
+        task_id='generate_invoice',
+        bash_command='echo "Generating PDF invoice"'
+    )
+    generate_business_report = BashOperator(
+        task_id='generate_business_report',
+        bash_command='echo "Generating business report"'
+    )
+    
+    # Carga paralela a múltiples destinos (dependencias 1:N)
+    load_to_data_warehouse = BashOperator(
+        task_id='load_to_data_warehouse',
+        bash_command='echo "Loading to Snowflake"'
+    )
+    load_to_operational_db = BashOperator(
+        task_id='load_to_operational_db',
+        bash_command='echo "Loading to PostgreSQL"'
+    )
+    send_to_s3 = BashOperator(
+        task_id='send_to_s3',
+        bash_command='echo "Backing up to S3"'
+    )
+    trigger_email_notifications = BashOperator(
+        task_id='trigger_email_notifications',
+        bash_command='echo "Sending notifications"'
+    )
+    
+    end = EmptyOperator(task_id='end', trigger_rule='none_failed')
+    
+    # Dependencies: start ramifica a validaciones
+    start >> [validate_orders_file, validate_customers_file, validate_products_file, validate_inventory_file]
+    
+    # Validaciones a extracciones (1:1)
+    validate_orders_file >> extract_orders
+    validate_customers_file >> extract_customers
+    validate_products_file >> extract_products
+    validate_inventory_file >> extract_inventory
+    
+    # Extracciones a quality checks (1:1)
+    extract_orders >> quality_check_orders
+    extract_customers >> quality_check_customers
+    extract_products >> quality_check_products
+    extract_inventory >> quality_check_inventory
+    
+    # Quality checks a enriquecimiento (N:1 - dependencias cruzadas)
+    [quality_check_orders, quality_check_customers] >> enrich_orders_with_customer_data
+    [quality_check_products, quality_check_inventory] >> enrich_products_with_inventory
+    
+    # Enriquecimiento a cálculos (N:M)
+    [enrich_orders_with_customer_data, enrich_products_with_inventory] >> calculate_pricing
+    enrich_orders_with_customer_data >> calculate_shipping
+    enrich_orders_with_customer_data >> calculate_taxes
+    
+    # Cálculos a agregación (N:1)
+    [calculate_pricing, calculate_shipping, calculate_taxes] >> aggregate_order_totals
+    
+    # Agregación a reportes (1:1)
+    aggregate_order_totals >> generate_invoice >> generate_business_report
+    
+    # Reportes a cargas paralelas (1:N)
+    generate_business_report >> [load_to_data_warehouse, load_to_operational_db, send_to_s3, trigger_email_notifications]
+    
+    # Todas las cargas convergen en end (N:1)
+    [load_to_data_warehouse, load_to_operational_db, send_to_s3, trigger_email_notifications] >> end

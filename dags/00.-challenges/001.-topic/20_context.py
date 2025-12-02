@@ -120,18 +120,7 @@ def transform_data(config, extract_result, date_range, **context):
 @task(task_id='generate_context_report')
 def generate_report(config, metadata, transform_result, **context):
     # Combina toda la info del contexto en un reporte
-    report = f"""
-    PIPELINE EXECUTION REPORT
-    ========================
-    Run ID: {metadata['run_id']}
-    DAG: {metadata['dag_id']}
-    Environment: {config['env']}
-    Data Source: {config['source']}
-    Rows Processed: {transform_result['transformed_rows']}
-    Quality Score: {transform_result['quality_score']}
-    Logical Date: {context['logical_date']}
-    Duration: {context.get('task_instance').duration} seconds
-    """
+    report = f""""""
     print(report)
     return report
 ```
@@ -192,5 +181,145 @@ airflow dags trigger context_challenge --conf '{"environment":"production","data
 import datetime
 
 from airflow.sdk import DAG, task
+from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Define funciones @task que usen **context y dag_run.conf
+# Solución del challenge
+
+@task(task_id='read_runtime_config')
+def read_config(**context):
+    """Lee parámetros pasados al triggear el DAG"""
+    dag_run = context['dag_run']
+    conf = dag_run.conf or {}  # dag_run.conf contiene params del trigger
+    
+    env = conf.get('environment', 'development')
+    source = conf.get('data_source', 's3')
+    limit = conf.get('record_limit', 100)
+    
+    print(f"Running in {env} mode, source: {source}, limit: {limit}")
+    return {'env': env, 'source': source, 'limit': limit}
+
+@task(task_id='process_date_range')
+def process_dates(**context):
+    """Accede a fechas del context de Airflow"""
+    logical_date = context['logical_date']
+    data_interval_start = context['data_interval_start']
+    data_interval_end = context['data_interval_end']
+    
+    print(f"Processing data from {data_interval_start} to {data_interval_end}")
+    print(f"Logical date: {logical_date}")
+    
+    start_str = data_interval_start.strftime('%Y-%m-%d %H:%M:%S')
+    end_str = data_interval_end.strftime('%Y-%m-%d %H:%M:%S')
+    
+    return {'start': start_str, 'end': end_str}
+
+@task(task_id='get_task_metadata')
+def get_metadata(**context):
+    """Accede a metadata de la tarea y DAG"""
+    task_instance = context['task_instance']
+    dag = context['dag']
+    
+    print(f"Task ID: {task_instance.task_id}")
+    print(f"DAG ID: {dag.dag_id}")
+    print(f"Try number: {task_instance.try_number}")
+    print(f"Max tries: {task_instance.max_tries}")
+    
+    return {
+        'task_id': task_instance.task_id,
+        'dag_id': dag.dag_id,
+        'try_number': task_instance.try_number
+    }
+
+@task(task_id='extract_data')
+def extract_data(config, dates, **context):
+    """Extrae datos usando configuración runtime y fechas"""
+    env = config['env']
+    source = config['source']
+    limit = config['limit']
+    start = dates['start']
+    end = dates['end']
+    
+    print(f"Extracting from {source} in {env} mode")
+    print(f"Date range: {start} to {end}")
+    print(f"Record limit: {limit}")
+    
+    # Simulación: diferentes comportamientos según config
+    if env == 'development':
+        records = min(limit, 100)  # Sample pequeño en dev
+    else:
+        records = limit  # Full data en prod
+    
+    return {'records_extracted': records, 'source': source}
+
+@task(task_id='transform_data')
+def transform_data(extracted, config, **context):
+    """Transforma datos adaptativamente según runtime config"""
+    env = config['env']
+    records = extracted['records_extracted']
+    
+    print(f"Transforming {records} records")
+    
+    # Validaciones exhaustivas solo en production
+    if env == 'production':
+        print("Running exhaustive validations (production mode)")
+        validations = ['schema', 'nulls', 'duplicates', 'referential_integrity']
+    else:
+        print("Running basic validations (development mode)")
+        validations = ['schema']
+    
+    return {
+        'records_transformed': records,
+        'validations_run': validations
+    }
+
+@task(task_id='load_data')
+def load_data(transformed, config, metadata, **context):
+    """Carga datos con metadata del contexto"""
+    env = config['env']
+    records = transformed['records_transformed']
+    dag_id = metadata['dag_id']
+    logical_date = context['logical_date']
+    
+    # Target diferente según environment
+    if env == 'production':
+        target = 'warehouse.production.fact_table'
+    else:
+        target = 'warehouse.dev.fact_table'
+    
+    print(f"Loading {records} records to {target}")
+    print(f"Processed by DAG: {dag_id}")
+    print(f"Logical date: {logical_date}")
+    
+    return {
+        'records_loaded': records,
+        'target': target,
+        'status': 'success'
+    }
+
+with DAG(
+    dag_id='context_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@hourly',
+    catchup=False,
+    tags=['challenge', 'context', 'taskflow'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # Leer configuración runtime
+    config = read_config()
+    
+    # Procesar fechas del context
+    dates = process_dates()
+    
+    # Obtener metadata
+    metadata = get_metadata()
+    
+    # Pipeline con datos del context
+    extracted = extract_data(config, dates)
+    transformed = transform_data(extracted, config)
+    loaded = load_data(transformed, config, metadata)
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> [config, dates, metadata] >> extracted >> transformed >> loaded >> end

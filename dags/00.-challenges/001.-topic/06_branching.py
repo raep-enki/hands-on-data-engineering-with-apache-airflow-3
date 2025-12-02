@@ -63,4 +63,126 @@ from airflow.providers.standard.operators.python import BranchPythonOperator
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Crea el pipeline con triple branching basado en datos
+# Solución del challenge
+
+# Funciones de branching (sin XComs, solo usando datetime)
+def branch_by_region(**context):
+    region_code = datetime.datetime.now().day % 3
+    if region_code == 0:
+        return 'process_north_america'
+    elif region_code == 1:
+        return 'process_europe'
+    else:
+        return 'process_asia_pacific'
+
+def branch_by_time(**context):
+    hour = datetime.datetime.now().hour
+    if 9 <= hour < 18:
+        return 'high_load_processing'
+    else:
+        return 'low_load_processing'
+
+def branch_by_weekday(**context):
+    weekday = datetime.datetime.now().weekday()
+    if weekday < 5:
+        return 'standard_delivery'
+    else:
+        return 'priority_delivery'
+
+with DAG(
+    dag_id='branching_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'branching'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # Primera decisión: por región
+    branch_by_region_task = BranchPythonOperator(
+        task_id='branch_by_region',
+        python_callable=branch_by_region,
+    )
+    
+    process_north_america = BashOperator(
+        task_id='process_north_america',
+        bash_command='echo "Processing North America region"',
+    )
+    
+    process_europe = BashOperator(
+        task_id='process_europe',
+        bash_command='echo "Processing Europe region"',
+    )
+    
+    process_asia_pacific = BashOperator(
+        task_id='process_asia_pacific',
+        bash_command='echo "Processing Asia-Pacific region"',
+    )
+    
+    aggregate_all_regions = BashOperator(
+        task_id='aggregate_all_regions',
+        bash_command='echo "Aggregating all regions"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    # Segunda decisión: por hora del día
+    branch_by_time_task = BranchPythonOperator(
+        task_id='branch_by_time',
+        python_callable=branch_by_time,
+    )
+    
+    high_load_processing = BashOperator(
+        task_id='high_load_processing',
+        bash_command='echo "High load processing (peak hours)"',
+    )
+    
+    low_load_processing = BashOperator(
+        task_id='low_load_processing',
+        bash_command='echo "Low load processing (normal hours)"',
+    )
+    
+    validate_output = BashOperator(
+        task_id='validate_output',
+        bash_command='echo "Validating output"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    # Tercera decisión: por día de la semana
+    branch_by_weekday_task = BranchPythonOperator(
+        task_id='branch_by_weekday',
+        python_callable=branch_by_weekday,
+    )
+    
+    standard_delivery = BashOperator(
+        task_id='standard_delivery',
+        bash_command='echo "Standard delivery (weekday)"',
+    )
+    
+    priority_delivery = BashOperator(
+        task_id='priority_delivery',
+        bash_command='echo "Priority delivery (weekend)"',
+    )
+    
+    send_completion_report = BashOperator(
+        task_id='send_completion_report',
+        bash_command='echo "Sending completion report"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    # Dependencies
+    start >> branch_by_region_task
+    branch_by_region_task >> [process_north_america, process_europe, process_asia_pacific]
+    [process_north_america, process_europe, process_asia_pacific] >> aggregate_all_regions
+    
+    aggregate_all_regions >> branch_by_time_task
+    branch_by_time_task >> [high_load_processing, low_load_processing]
+    [high_load_processing, low_load_processing] >> validate_output
+    
+    validate_output >> branch_by_weekday_task
+    branch_by_weekday_task >> [standard_delivery, priority_delivery]
+    [standard_delivery, priority_delivery] >> send_completion_report
+    
+    send_completion_report >> end

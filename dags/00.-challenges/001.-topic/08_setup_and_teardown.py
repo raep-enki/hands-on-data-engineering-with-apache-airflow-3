@@ -76,4 +76,121 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import BranchPythonOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Implementa el DAG según los requisitos
+# Solución del challenge
+
+def branch_by_performance(**context):
+    # Simulamos accuracy
+    accuracy = 0.88
+    if accuracy >= 0.85:
+        return 'deploy_model_to_staging'
+    else:
+        return 'notify_poor_performance'
+
+with DAG(
+    dag_id='ml_training_pipeline',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@weekly',
+    catchup=False,
+    tags=['challenge', 'setup_and_teardown'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # Setups (preparan recursos)
+    setup_temp_directories = BashOperator(
+        task_id='setup_temp_directories',
+        bash_command='echo "Creating /tmp/ml_training/, /tmp/datasets/, /tmp/models/"',
+    )
+    
+    setup_database_connection = BashOperator(
+        task_id='setup_database_connection',
+        bash_command='echo "Opening PostgreSQL connection pool (max 10)"',
+    )
+    
+    setup_gpu_allocation = BashOperator(
+        task_id='setup_gpu_allocation',
+        bash_command='echo "Reserving 2x NVIDIA A100 GPUs"',
+    )
+    
+    # Work tasks
+    validate_prerequisites = BashOperator(
+        task_id='validate_prerequisites',
+        bash_command='echo "Validating Python packages, libcuda, disk space"',
+    )
+    
+    download_training_data = BashOperator(
+        task_id='download_training_data',
+        bash_command='echo "Downloading 50GB from S3 to /tmp/datasets/"',
+    )
+    
+    split_train_test = BashOperator(
+        task_id='split_train_test',
+        bash_command='echo "Splitting data: 80% train / 20% test"',
+    )
+    
+    validate_training_data = BashOperator(
+        task_id='validate_training_data',
+        bash_command='echo "Validating training data format"',
+    )
+    
+    validate_test_data = BashOperator(
+        task_id='validate_test_data',
+        bash_command='echo "Validating test data format"',
+    )
+    
+    train_model = BashOperator(
+        task_id='train_model',
+        bash_command='echo "Training XGBoost on GPU (2 hours)"',
+    )
+    
+    evaluate_model = BashOperator(
+        task_id='evaluate_model',
+        bash_command='echo "Evaluating model: accuracy 0.88"',
+    )
+    
+    branch_by_performance_task = BranchPythonOperator(
+        task_id='branch_by_performance',
+        python_callable=branch_by_performance,
+    )
+    
+    deploy_model_to_staging = BashOperator(
+        task_id='deploy_model_to_staging',
+        bash_command='echo "Deploying model to S3"',
+    )
+    
+    notify_poor_performance = BashOperator(
+        task_id='notify_poor_performance',
+        bash_command='echo "Sending alert to Slack: poor performance"',
+    )
+    
+    # Teardowns (limpian recursos SIEMPRE)
+    cleanup_temp_directories = BashOperator(
+        task_id='cleanup_temp_directories',
+        bash_command='echo "Deleting /tmp/ml_training/ (200GB freed)"',
+    ).as_teardown(setups=setup_temp_directories)
+    
+    cleanup_database_connection = BashOperator(
+        task_id='cleanup_database_connection',
+        bash_command='echo "Closing PostgreSQL connections"',
+    ).as_teardown(setups=setup_database_connection)
+    
+    cleanup_gpu_allocation = BashOperator(
+        task_id='cleanup_gpu_allocation',
+        bash_command='echo "Releasing GPUs, stopping cloud instances"',
+    ).as_teardown(setups=setup_gpu_allocation)
+    
+    end = EmptyOperator(task_id='end')
+    
+    # Dependencies
+    start >> [setup_temp_directories, setup_database_connection, setup_gpu_allocation]
+    [setup_temp_directories, setup_database_connection, setup_gpu_allocation] >> validate_prerequisites
+    validate_prerequisites >> download_training_data >> split_train_test
+    split_train_test >> [validate_training_data, validate_test_data]
+    [validate_training_data, validate_test_data] >> train_model
+    train_model >> evaluate_model >> branch_by_performance_task
+    branch_by_performance_task >> [deploy_model_to_staging, notify_poor_performance]
+    
+    # Los teardowns se ejecutan automáticamente después de los work tasks
+    deploy_model_to_staging >> [cleanup_temp_directories, cleanup_database_connection, cleanup_gpu_allocation]
+    notify_poor_performance >> [cleanup_temp_directories, cleanup_database_connection, cleanup_gpu_allocation]
+    [cleanup_temp_directories, cleanup_database_connection, cleanup_gpu_allocation] >> end

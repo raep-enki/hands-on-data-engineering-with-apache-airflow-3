@@ -125,4 +125,172 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Configura los 3 DAGs con deadlines y callbacks apropiados
+# Solución del challenge - Callbacks simulados
+def alert_pagerduty(context):
+    print(f"🚨 CRITICAL ALERT: {context['task_instance'].task_id} missed deadline!")
+
+def alert_slack(context):
+    print(f"⚠️  WARNING: {context['task_instance'].task_id} missed deadline")
+
+def log_warning(context):
+    print(f"ℹ️  INFO: {context['task_instance'].task_id} took longer than expected")
+
+# DAG 1: Tier 1 - Pagos (CRÍTICO)
+with DAG(
+    dag_id='deadline_challenge_tier1_payments',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='*/15 * * * *',
+    catchup=False,
+    tags=['challenge', 'deadline_alerts', 'tier1_critical'],
+) as dag1:
+    
+    start = EmptyOperator(task_id='start')
+    
+    ingest_pending_payments = BashOperator(
+        task_id='ingest_pending_payments',
+        bash_command='echo "Ingesting pending payments"',
+        execution_timeout=timedelta(minutes=2),
+        on_failure_callback=alert_pagerduty,
+    )
+    
+    validate_payment_data = BashOperator(
+        task_id='validate_payment_data',
+        bash_command='echo "Validating payment data"',
+        execution_timeout=timedelta(minutes=1),
+        on_failure_callback=alert_pagerduty,
+    )
+    
+    process_credit_cards = BashOperator(
+        task_id='process_credit_cards',
+        bash_command='echo "Processing via Stripe/PayPal"',
+        execution_timeout=timedelta(minutes=5),
+        on_failure_callback=alert_pagerduty,
+    )
+    
+    update_order_status = BashOperator(
+        task_id='update_order_status',
+        bash_command='echo "Marking orders as paid"',
+        execution_timeout=timedelta(minutes=2),
+        on_failure_callback=alert_pagerduty,
+    )
+    
+    send_confirmation_emails = BashOperator(
+        task_id='send_confirmation_emails',
+        bash_command='echo "Sending receipts"',
+        execution_timeout=timedelta(minutes=2),
+        on_failure_callback=alert_pagerduty,
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> ingest_pending_payments >> validate_payment_data >> process_credit_cards
+    process_credit_cards >> update_order_status >> send_confirmation_emails >> end
+
+# DAG 2: Tier 2 - Reportes (IMPORTANTE)
+with DAG(
+    dag_id='deadline_challenge_tier2_reporting',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='0 * * * *',
+    catchup=False,
+    tags=['challenge', 'deadline_alerts', 'tier2_important'],
+) as dag2:
+    
+    start = EmptyOperator(task_id='start')
+    
+    extract_sales_data = BashOperator(
+        task_id='extract_sales_data',
+        bash_command='echo "Extracting sales data"',
+        execution_timeout=timedelta(minutes=10),
+        on_failure_callback=alert_slack,
+    )
+    
+    extract_inventory_data = BashOperator(
+        task_id='extract_inventory_data',
+        bash_command='echo "Extracting inventory data"',
+        execution_timeout=timedelta(minutes=10),
+        on_failure_callback=alert_slack,
+    )
+    
+    join_and_aggregate = BashOperator(
+        task_id='join_and_aggregate',
+        bash_command='echo "Joining and aggregating"',
+        execution_timeout=timedelta(minutes=15),
+        on_failure_callback=alert_slack,
+    )
+    
+    calculate_kpis = BashOperator(
+        task_id='calculate_kpis',
+        bash_command='echo "Calculating KPIs"',
+        execution_timeout=timedelta(minutes=5),
+        on_failure_callback=alert_slack,
+    )
+    
+    generate_pdf_report = BashOperator(
+        task_id='generate_pdf_report',
+        bash_command='echo "Generating PDF report"',
+        execution_timeout=timedelta(minutes=3),
+        on_failure_callback=alert_slack,
+    )
+    
+    send_to_stakeholders = BashOperator(
+        task_id='send_to_stakeholders',
+        bash_command='echo "Sending report to stakeholders"',
+        execution_timeout=timedelta(minutes=2),
+        on_failure_callback=alert_slack,
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> [extract_sales_data, extract_inventory_data] >> join_and_aggregate
+    join_and_aggregate >> calculate_kpis >> generate_pdf_report >> send_to_stakeholders >> end
+
+# DAG 3: Tier 3 - Batch nocturno (RELAJADO)
+with DAG(
+    dag_id='deadline_challenge_tier3_batch',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='0 1 * * *',
+    catchup=False,
+    tags=['challenge', 'deadline_alerts', 'tier3_batch'],
+) as dag3:
+    
+    start = EmptyOperator(task_id='start')
+    
+    full_extract_all_sources = BashOperator(
+        task_id='full_extract_all_sources',
+        bash_command='echo "Extracting from 10 systems"',
+        execution_timeout=timedelta(hours=5),
+        on_failure_callback=log_warning,
+    )
+    
+    data_quality_checks = BashOperator(
+        task_id='data_quality_checks',
+        bash_command='echo "Running quality checks"',
+        execution_timeout=timedelta(hours=2),
+        on_failure_callback=log_warning,
+    )
+    
+    transform_and_enrich = BashOperator(
+        task_id='transform_and_enrich',
+        bash_command='echo "Transforming and enriching with ML"',
+        execution_timeout=timedelta(hours=8),
+        on_failure_callback=log_warning,
+    )
+    
+    load_to_data_lake = BashOperator(
+        task_id='load_to_data_lake',
+        bash_command='echo "Loading TBs to S3/Parquet"',
+        execution_timeout=timedelta(hours=3),
+        on_failure_callback=log_warning,
+    )
+    
+    build_aggregated_tables = BashOperator(
+        task_id='build_aggregated_tables',
+        bash_command='echo "Building summary tables for BI"',
+        execution_timeout=timedelta(hours=2),
+        on_failure_callback=log_warning,
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> full_extract_all_sources >> data_quality_checks >> transform_and_enrich
+    transform_and_enrich >> load_to_data_lake >> build_aggregated_tables >> end

@@ -37,4 +37,71 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Crea el pipeline de monitoreo
+# Solución del challenge
+with DAG(
+    dag_id='website_monitoring_pipeline',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='*/30 * * * *',
+    catchup=False,
+    tags=['challenge', 'declaring_a_dag'],
+) as dag:
+    
+    start_monitoring = EmptyOperator(task_id='start_monitoring')
+    
+    ping_website = BashOperator(
+        task_id='ping_website',
+        bash_command='echo "Ping: website is responding"',
+    )
+    
+    check_http_status = BashOperator(
+        task_id='check_http_status',
+        bash_command='echo "HTTP Status: 200 OK"',
+    )
+    
+    check_response_time = BashOperator(
+        task_id='check_response_time',
+        bash_command='echo "Response time: 125ms"',
+    )
+    
+    check_ssl_certificate = BashOperator(
+        task_id='check_ssl_certificate',
+        bash_command='echo "SSL: Valid until 2025-12-31"',
+    )
+    
+    health_checkpoint = EmptyOperator(task_id='health_checkpoint')
+    
+    analyze_uptime = BashOperator(
+        task_id='analyze_uptime',
+        bash_command='echo "Uptime: 99.95%"',
+    )
+    
+    analyze_performance = BashOperator(
+        task_id='analyze_performance',
+        bash_command='echo "Avg response: 110ms"',
+    )
+    
+    generate_alerts = BashOperator(
+        task_id='generate_alerts',
+        bash_command='echo "No alerts generated"',
+    )
+    
+    update_dashboard = BashOperator(
+        task_id='update_dashboard',
+        bash_command='echo "Dashboard updated successfully"',
+    )
+    
+    send_report = BashOperator(
+        task_id='send_report',
+        bash_command='echo "Report sent to team@company.com"',
+    )
+    
+    end_monitoring = EmptyOperator(task_id='end_monitoring')
+    
+    # Dependencies
+    start_monitoring >> ping_website
+    ping_website >> [check_http_status, check_response_time, check_ssl_certificate]
+    [check_http_status, check_response_time, check_ssl_certificate] >> health_checkpoint
+    health_checkpoint >> [analyze_uptime, analyze_performance]
+    [analyze_uptime, analyze_performance] >> generate_alerts
+    generate_alerts >> [update_dashboard, send_report]
+    [update_dashboard, send_report] >> end_monitoring

@@ -102,4 +102,115 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import BranchPythonOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Diseña el pipeline de migración con backfill controlado
+# Solución del challenge
+
+def branch_skip_or_continue(**context):
+    # Simulamos verificación de migración
+    # En realidad debería consultar migration_log
+    already_migrated = False  # Cambiar según consulta real
+    if already_migrated:
+        return 'skip_already_done'
+    else:
+        return 'extract_from_legacy'
+
+with DAG(
+    dag_id='migration_backfill_pipeline',
+    start_date=datetime.datetime.now() - datetime.timedelta(days=90),
+    schedule='@daily',
+    catchup=True,
+    max_active_runs=3,
+    tags=['challenge', 'backfill', 'migration'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    identify_migration_date = BashOperator(
+        task_id='identify_migration_date',
+        bash_command='echo "Migrating date: {{ ds }}"',
+    )
+    
+    check_if_already_migrated = BashOperator(
+        task_id='check_if_already_migrated',
+        bash_command='echo "Checking if {{ ds }} already migrated"',
+    )
+    
+    branch_skip_or_continue_task = BranchPythonOperator(
+        task_id='branch_skip_or_continue',
+        python_callable=branch_skip_or_continue,
+    )
+    
+    # Path 1: Si ya está migrado
+    skip_already_done = EmptyOperator(task_id='skip_already_done')
+    
+    # Path 2: Si necesita migración
+    extract_from_legacy = BashOperator(
+        task_id='extract_from_legacy',
+        bash_command='echo "Extracting from Oracle for {{ ds }}"',
+    )
+    
+    validate_extract = BashOperator(
+        task_id='validate_extract',
+        bash_command='echo "Validating extract for {{ ds }}"',
+    )
+    
+    # Validaciones paralelas
+    validate_data_types = BashOperator(
+        task_id='validate_data_types',
+        bash_command='echo "Validating data types"',
+    )
+    
+    validate_business_rules = BashOperator(
+        task_id='validate_business_rules',
+        bash_command='echo "Validating business rules"',
+    )
+    
+    validate_referential_integrity = BashOperator(
+        task_id='validate_referential_integrity',
+        bash_command='echo "Validating referential integrity"',
+    )
+    
+    transform_to_snowflake_format = BashOperator(
+        task_id='transform_to_snowflake_format',
+        bash_command='echo "Transforming to Snowflake format for {{ ds }}"',
+    )
+    
+    stage_to_s3 = BashOperator(
+        task_id='stage_to_s3',
+        bash_command='echo "Uploading to s3://migration-bucket/{{ ds }}/"',
+    )
+    
+    load_to_snowflake = BashOperator(
+        task_id='load_to_snowflake',
+        bash_command='echo "COPY INTO transactions_new FROM s3://migration-bucket/{{ ds }}/"',
+    )
+    
+    verify_row_counts = BashOperator(
+        task_id='verify_row_counts',
+        bash_command='echo "Verifying row counts for {{ ds }}"',
+    )
+    
+    update_migration_log = BashOperator(
+        task_id='update_migration_log',
+        bash_command='echo "Marking {{ ds }} as completed in migration_log"',
+    )
+    
+    cleanup_temp_files = BashOperator(
+        task_id='cleanup_temp_files',
+        bash_command='echo "Cleaning temp files for {{ ds }}"',
+        trigger_rule='all_done',
+    )
+    
+    end = EmptyOperator(task_id='end', trigger_rule='none_failed_min_one_success')
+    
+    # Dependencies
+    start >> identify_migration_date >> check_if_already_migrated >> branch_skip_or_continue_task
+    
+    # Path 1: Skip
+    branch_skip_or_continue_task >> skip_already_done >> end
+    
+    # Path 2: Migración completa
+    branch_skip_or_continue_task >> extract_from_legacy >> validate_extract
+    validate_extract >> [validate_data_types, validate_business_rules, validate_referential_integrity]
+    [validate_data_types, validate_business_rules, validate_referential_integrity] >> transform_to_snowflake_format
+    transform_to_snowflake_format >> stage_to_s3 >> load_to_snowflake >> verify_row_counts
+    verify_row_counts >> update_migration_log >> cleanup_temp_files >> end

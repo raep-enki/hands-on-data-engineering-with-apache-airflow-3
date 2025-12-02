@@ -107,4 +107,180 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.utils.edgemodifier import Label
 
-# TODO: Documenta el flujo con edge labels descriptivos
+# Solución del challenge
+
+def branch_by_data_quality(**context):
+    score = 88  # Simulación
+    if score >= 95:
+        return 'process_premium_path'
+    elif score >= 80:
+        return 'process_standard_path'
+    else:
+        return 'flag_for_manual_review'
+
+def branch_by_record_count(**context):
+    count = 50000  # Simulación
+    if count >= 100000:
+        return 'use_spark_processing'
+    elif count >= 10000:
+        return 'use_pandas_processing'
+    else:
+        return 'use_simple_python'
+
+def branch_by_metrics_health(**context):
+    metrics_ok = True  # Simulación
+    if metrics_ok:
+        return 'load_to_production'
+    else:
+        return 'create_incident_ticket'
+
+with DAG(
+    dag_id='conditional_data_pipeline',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'edge_labels', 'documentation'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    ingest_customer_data = BashOperator(
+        task_id='ingest_customer_data',
+        bash_command='echo "Loading raw customer data"',
+    )
+    
+    validate_data_schema = BashOperator(
+        task_id='validate_data_schema',
+        bash_command='echo "Validating schema"',
+    )
+    
+    # Primera decisión: por calidad de datos
+    branch_by_data_quality_task = BranchPythonOperator(
+        task_id='branch_by_data_quality',
+        python_callable=branch_by_data_quality,
+    )
+    
+    process_premium_path = BashOperator(
+        task_id='process_premium_path',
+        bash_command='echo "Premium processing with advanced analytics"',
+    )
+    
+    process_standard_path = BashOperator(
+        task_id='process_standard_path',
+        bash_command='echo "Standard processing"',
+    )
+    
+    flag_for_manual_review = BashOperator(
+        task_id='flag_for_manual_review',
+        bash_command='echo "Flagging for human review"',
+    )
+    
+    run_base_transformations = BashOperator(
+        task_id='run_base_transformations',
+        bash_command='echo "Running base transformations"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    # Segunda decisión: por volumen
+    branch_by_record_count_task = BranchPythonOperator(
+        task_id='branch_by_record_count',
+        python_callable=branch_by_record_count,
+    )
+    
+    use_spark_processing = BashOperator(
+        task_id='use_spark_processing',
+        bash_command='echo "Using Spark for millions of records"',
+    )
+    
+    use_pandas_processing = BashOperator(
+        task_id='use_pandas_processing',
+        bash_command='echo "Using Pandas for thousands"',
+    )
+    
+    use_simple_python = BashOperator(
+        task_id='use_simple_python',
+        bash_command='echo "Using vanilla Python"',
+    )
+    
+    validate_processing_results = BashOperator(
+        task_id='validate_processing_results',
+        bash_command='echo "Validating results"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    check_business_metrics = BashOperator(
+        task_id='check_business_metrics',
+        bash_command='echo "Calculating business metrics"',
+    )
+    
+    # Tercera decisión: por salud de métricas
+    branch_by_metrics_health_task = BranchPythonOperator(
+        task_id='branch_by_metrics_health',
+        python_callable=branch_by_metrics_health,
+    )
+    
+    load_to_production = BashOperator(
+        task_id='load_to_production',
+        bash_command='echo "Loading to production"',
+    )
+    
+    create_incident_ticket = BashOperator(
+        task_id='create_incident_ticket',
+        bash_command='echo "Opening Jira ticket for investigation"',
+    )
+    
+    update_monitoring_dashboard = BashOperator(
+        task_id='update_monitoring_dashboard',
+        bash_command='echo "Updating Grafana"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    # Paths finales
+    archive_to_s3 = BashOperator(
+        task_id='archive_to_s3',
+        bash_command='echo "Archiving to S3"',
+    )
+    
+    refresh_redis_cache = BashOperator(
+        task_id='refresh_redis_cache',
+        bash_command='echo "Invalidating cache"',
+    )
+    
+    send_email_report = BashOperator(
+        task_id='send_email_report',
+        bash_command='echo "Sending summary report"',
+    )
+    
+    end = EmptyOperator(task_id='end', trigger_rule='none_failed_min_one_success')
+    
+    # Dependencies with Labels
+    start >> ingest_customer_data >> validate_data_schema >> branch_by_data_quality_task
+    
+    # Primera decisión con labels
+    branch_by_data_quality_task >> Label("Quality Excellent (>=95)") >> process_premium_path
+    branch_by_data_quality_task >> Label("Quality Good (80-95)") >> process_standard_path
+    branch_by_data_quality_task >> Label("Quality Poor (<80)") >> flag_for_manual_review
+    
+    [process_premium_path, process_standard_path, flag_for_manual_review] >> run_base_transformations
+    
+    # Segunda decisión con labels
+    run_base_transformations >> branch_by_record_count_task
+    branch_by_record_count_task >> Label("High Volume (100k+ records)") >> use_spark_processing
+    branch_by_record_count_task >> Label("Medium Volume (10k-100k)") >> use_pandas_processing
+    branch_by_record_count_task >> Label("Low Volume (<10k)") >> use_simple_python
+    
+    [use_spark_processing, use_pandas_processing, use_simple_python] >> validate_processing_results
+    
+    # Tercera decisión con labels
+    validate_processing_results >> check_business_metrics >> branch_by_metrics_health_task
+    branch_by_metrics_health_task >> Label("Metrics Healthy") >> load_to_production
+    branch_by_metrics_health_task >> Label("Metrics Degraded - Investigation Required") >> create_incident_ticket
+    
+    [load_to_production, create_incident_ticket] >> update_monitoring_dashboard
+    
+    # Paths finales con labels
+    update_monitoring_dashboard >> Label("Send to Data Lake") >> archive_to_s3
+    update_monitoring_dashboard >> Label("Update Cache") >> refresh_redis_cache
+    update_monitoring_dashboard >> Label("Notify Stakeholders") >> send_email_report
+    
+    [archive_to_s3, refresh_redis_cache, send_email_report] >> end

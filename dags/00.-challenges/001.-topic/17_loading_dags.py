@@ -117,4 +117,74 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Crea la factory function que genera múltiples DAGs
+# Solución del challenge
+
+def create_etl_dag(region, department):
+    """Factory function que crea DAGs parametrizados por región y departamento"""
+    
+    # Config específica por departamento
+    dept_config = {
+        'sales': {'schedule': '@hourly', 'timeout': 30},
+        'marketing': {'schedule': '0 */6 * * *', 'timeout': 120},
+        'finance': {'schedule': '0 2 * * *', 'timeout': 240},
+        'operations': {'schedule': '0 1 * * *', 'timeout': 360}
+    }
+    
+    config = dept_config[department.lower()]
+    
+    with DAG(
+        dag_id=f'etl_{region.lower()}_{department.lower()}',
+        schedule=config['schedule'],
+        start_date=datetime.datetime(2024, 1, 1),
+        catchup=False,
+        tags=['challenge', 'loading_dags', region.lower(), department.lower()],
+    ) as dag:
+        
+        start = EmptyOperator(task_id='start')
+        
+        extract_from_source = BashOperator(
+            task_id='extract_from_source',
+            bash_command=f'echo "Extracting from {region} system"',
+            execution_timeout=datetime.timedelta(minutes=config['timeout']),
+        )
+        
+        validate_raw_data = BashOperator(
+            task_id='validate_raw_data',
+            bash_command=f'echo "Validating {department} data"',
+        )
+        
+        transform_data = BashOperator(
+            task_id='transform_data',
+            bash_command=f'echo "Applying {department} business rules"',
+        )
+        
+        quality_check = BashOperator(
+            task_id='quality_check',
+            bash_command=f'echo "QA check for {department}"',
+        )
+        
+        load_to_warehouse = BashOperator(
+            task_id='load_to_warehouse',
+            bash_command=f'echo "Loading to {region}_{department}_data"',
+        )
+        
+        notify_completion = BashOperator(
+            task_id='notify_completion',
+            bash_command=f'echo "Notifying {department} team"',
+        )
+        
+        end = EmptyOperator(task_id='end')
+        
+        start >> extract_from_source >> validate_raw_data >> transform_data
+        transform_data >> quality_check >> load_to_warehouse >> notify_completion >> end
+    
+    return dag
+
+# Generar 16 DAGs (4 regiones × 4 departamentos)
+regions = ['US', 'EU', 'APAC', 'LATAM']
+departments = ['Sales', 'Marketing', 'Finance', 'Operations']
+
+for region in regions:
+    for department in departments:
+        dag_id = f'etl_{region.lower()}_{department.lower()}'
+        globals()[dag_id] = create_etl_dag(region, department)

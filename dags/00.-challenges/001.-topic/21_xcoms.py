@@ -59,17 +59,7 @@ def calculate_derived(base_metrics):
 @task(task_id='generate_executive_report')
 def generate_exec_report(base_metrics, derived_metrics):
     # Usa datos de 2 tareas diferentes
-    report = f"""
-    EXECUTIVE SUMMARY
-    =================
-    Total Revenue: ${base_metrics['total_sales']:,}
-    Total Customers: {base_metrics['num_customers']:,}
-    Total Orders: {base_metrics['num_orders']:,}
-    
-    Average Order Value: ${derived_metrics['aov']:.2f}
-    Revenue Per Customer: ${derived_metrics['rpc']:.2f}
-    Orders Per Customer: {derived_metrics['orders_per_customer']:.2f}
-    """
+    report = f""""""
     print(report)
     return report
 ```
@@ -79,13 +69,7 @@ def generate_exec_report(base_metrics, derived_metrics):
 @task(task_id='generate_marketing_report')
 def generate_marketing_report(base_metrics):
     # Solo necesita métricas base
-    report = f"""
-    MARKETING REPORT
-    ================
-    Customer Acquisition: {base_metrics['num_customers']:,} customers
-    Total Orders: {base_metrics['num_orders']:,}
-    Conversion Rate: {(base_metrics['num_orders'] / base_metrics['num_customers']) * 100:.1f}%
-    """
+    report = f""""""
     print(report)
     return report
 ```
@@ -95,22 +79,7 @@ def generate_marketing_report(base_metrics):
 @task(task_id='generate_financial_report')
 def generate_financial_report(base_metrics, derived_metrics):
     # Usa toda la información disponible
-    report = f"""
-    FINANCIAL REPORT
-    ================
-    Revenue: ${base_metrics['total_sales']:,}
-    Orders: {base_metrics['num_orders']:,}
-    Customers: {base_metrics['num_customers']:,}
-    
-    Key Metrics:
-    - AOV: ${derived_metrics['aov']:.2f}
-    - RPC: ${derived_metrics['rpc']:.2f}
-    - Repeat Rate: {derived_metrics['orders_per_customer']:.2f}x
-    
-    Projections:
-    - Monthly ARR: ${base_metrics['total_sales'] * 12:,}
-    - Customer LTV: ${derived_metrics['rpc'] * derived_metrics['orders_per_customer']:.2f}
-    """
+    report = f""""""
     print(report)
     return report
 ```
@@ -199,4 +168,108 @@ import datetime
 
 from airflow.sdk import DAG, task
 
-# TODO: Implementa el pipeline con XCom push/pull entre tareas
+# Solución del challenge
+
+@task(task_id='extract_total_records')
+def extract_records(**context):
+    """Extrae y cuenta registros - XCom automático"""
+    total = 5000
+    print(f"Extracted {total} records")
+    return total  # TaskFlow hace XCom push automáticamente
+
+@task(task_id='extract_error_rate')
+def extract_errors(**context):
+    """Extrae tasa de errores - XCom automático"""
+    error_rate = 0.03  # 3%
+    print(f"Error rate: {error_rate}")
+    return error_rate
+
+@task(task_id='calculate_metrics')
+def calculate_metrics(total_records, error_rate, **context):
+    """Recibe múltiples XComs como argumentos"""
+    # TaskFlow hace XCom pull automáticamente de las dependencias
+    clean_records = int(total_records * (1 - error_rate))
+    error_records = total_records - clean_records
+    
+    print(f"Total: {total_records}")
+    print(f"Clean: {clean_records}")
+    print(f"Errors: {error_records}")
+    
+    return {
+        'total': total_records,
+        'clean': clean_records,
+        'errors': error_records,
+        'error_rate': error_rate
+    }
+
+@task(task_id='push_multiple_values')
+def push_multiple(**context):
+    """XCom manual: push múltiples keys"""
+    ti = context['task_instance']
+    
+    # Push manual de múltiples valores
+    ti.xcom_push(key='database_name', value='warehouse_prod')
+    ti.xcom_push(key='table_name', value='fact_sales')
+    ti.xcom_push(key='partition_date', value='2024-01-01')
+    
+    print("Pushed 3 XCom keys: database_name, table_name, partition_date")
+    return "metadata_pushed"  # Return también hace push con key='return_value'
+
+@task(task_id='pull_specific_values')
+def pull_specific(**context):
+    """XCom manual: pull keys específicas"""
+    ti = context['task_instance']
+    
+    # Pull manual de valores específicos
+    db = ti.xcom_pull(task_ids='push_multiple_values', key='database_name')
+    table = ti.xcom_pull(task_ids='push_multiple_values', key='table_name')
+    partition = ti.xcom_pull(task_ids='push_multiple_values', key='partition_date')
+    
+    print(f"Loading to {db}.{table} partition {partition}")
+    
+    return {'target': f"{db}.{table}", 'partition': partition}
+
+@task(task_id='generate_report')
+def generate_report(metrics, load_info, **context):
+    """Consolida múltiples XComs en reporte final"""
+    # Recibe XComs de tareas anteriores como argumentos
+    print("=== PROCESSING REPORT ===")
+    print(f"Total records processed: {metrics['total']}")
+    print(f"Clean records: {metrics['clean']}")
+    print(f"Error records: {metrics['errors']}")
+    print(f"Error rate: {metrics['error_rate']:.2%}")
+    print(f"Loaded to: {load_info['target']}")
+    print(f"Partition: {load_info['partition']}")
+    
+    return {
+        'report_status': 'completed',
+        'summary': metrics,
+        'destination': load_info
+    }
+
+with DAG(
+    dag_id='xcoms_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'xcoms'],
+) as dag:
+    
+    # Extracciones paralelas
+    total = extract_records()
+    errors = extract_errors()
+    
+    # Calcula métricas (recibe 2 XComs)
+    metrics = calculate_metrics(total, errors)
+    
+    # Push/pull manual
+    metadata = push_multiple()
+    load_info = pull_specific()
+    
+    # Reporte final (consolida todo)
+    report = generate_report(metrics, load_info)
+    
+    # Dependencies
+    [total, errors] >> metrics
+    metadata >> load_info
+    [metrics, load_info] >> report

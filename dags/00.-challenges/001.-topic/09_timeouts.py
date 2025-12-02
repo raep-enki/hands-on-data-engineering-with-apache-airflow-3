@@ -84,4 +84,96 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Define el pipeline con timeouts y SLAs estratégicos
+# Solución del challenge
+with DAG(
+    dag_id='timeout_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='*/30 * * * *',
+    catchup=False,
+    tags=['challenge', 'timeouts'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    ping_external_service = BashOperator(
+        task_id='ping_external_service',
+        bash_command='echo "Pinging external API"',
+        execution_timeout=timedelta(seconds=10),
+        retries=5,
+        retry_delay=timedelta(seconds=30),
+    )
+    
+    fetch_api_data = BashOperator(
+        task_id='fetch_api_data',
+        bash_command='echo "Fetching data from REST API"',
+        execution_timeout=timedelta(minutes=2),
+        retries=3,
+        sla=timedelta(minutes=5),
+    )
+    
+    validate_api_response = BashOperator(
+        task_id='validate_api_response',
+        bash_command='echo "Validating JSON schema"',
+        execution_timeout=timedelta(seconds=30),
+        retries=1,
+        sla=timedelta(minutes=6),
+    )
+    
+    # Procesamiento urgente (timeout corto, SLA estricto)
+    process_realtime_alerts = BashOperator(
+        task_id='process_realtime_alerts',
+        bash_command='echo "Processing realtime alerts"',
+        execution_timeout=timedelta(minutes=3),
+        retries=2,
+        sla=timedelta(minutes=10),
+    )
+    
+    # Procesamiento estándar (timeout medio)
+    process_business_metrics = BashOperator(
+        task_id='process_business_metrics',
+        bash_command='echo "Calculating business KPIs"',
+        execution_timeout=timedelta(minutes=10),
+        retries=2,
+        sla=timedelta(minutes=20),
+    )
+    
+    # Procesamiento pesado (timeout largo, sin SLA estricto)
+    process_historical_logs = BashOperator(
+        task_id='process_historical_logs',
+        bash_command='echo "Analyzing 10GB of logs"',
+        execution_timeout=timedelta(hours=1),
+        retries=1,
+    )
+    
+    # Agregación y validación final
+    aggregate_all_results = BashOperator(
+        task_id='aggregate_all_results',
+        bash_command='echo "Aggregating all results"',
+        execution_timeout=timedelta(minutes=5),
+        retries=3,
+        sla=timedelta(minutes=25),
+    )
+    
+    send_to_dashboard = BashOperator(
+        task_id='send_to_dashboard',
+        bash_command='echo "Updating Grafana dashboard"',
+        execution_timeout=timedelta(minutes=2),
+        retries=5,
+        sla=timedelta(minutes=28),
+    )
+    
+    cleanup = BashOperator(
+        task_id='cleanup',
+        bash_command='echo "Cleaning temp files"',
+        execution_timeout=timedelta(minutes=1),
+        retries=0,
+        trigger_rule='all_done',
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    # Dependencies
+    start >> ping_external_service >> fetch_api_data >> validate_api_response
+    validate_api_response >> [process_realtime_alerts, process_business_metrics, process_historical_logs]
+    [process_realtime_alerts, process_business_metrics, process_historical_logs] >> aggregate_all_results
+    aggregate_all_results >> send_to_dashboard >> cleanup >> end

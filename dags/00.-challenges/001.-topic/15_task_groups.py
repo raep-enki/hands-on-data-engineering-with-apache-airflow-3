@@ -115,4 +115,94 @@ from airflow.sdk import DAG, task_group
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Organiza el pipeline usando task groups
+# Solución del challenge
+with DAG(
+    dag_id='multi_region_etl',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'task_groups', 'multi_region'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # Task Group 1: Initial Validations
+    @task_group(group_id='initial_validations')
+    def initial_validations_group():
+        check_source_systems = BashOperator(
+            task_id='check_source_systems',
+            bash_command='echo "Checking all source systems are up"',
+        )
+        validate_credentials = BashOperator(
+            task_id='validate_credentials',
+            bash_command='echo "Validating DB connections"',
+        )
+        check_disk_space = BashOperator(
+            task_id='check_disk_space',
+            bash_command='echo "Checking disk space"',
+        )
+        check_source_systems >> validate_credentials >> check_disk_space
+    
+    # Task Group 2-5: Process each region
+    @task_group(group_id='process_north_america')
+    def process_na():
+        extract = BashOperator(task_id='extract_na_data', bash_command='echo "Extract NA"')
+        transform = BashOperator(task_id='transform_na_data', bash_command='echo "Transform NA"')
+        validate = BashOperator(task_id='validate_na_quality', bash_command='echo "Validate NA"')
+        load = BashOperator(task_id='load_na_to_staging', bash_command='echo "Load NA"')
+        extract >> transform >> validate >> load
+    
+    @task_group(group_id='process_south_america')
+    def process_sa():
+        extract = BashOperator(task_id='extract_sa_data', bash_command='echo "Extract SA"')
+        transform = BashOperator(task_id='transform_sa_data', bash_command='echo "Transform SA"')
+        validate = BashOperator(task_id='validate_sa_quality', bash_command='echo "Validate SA"')
+        load = BashOperator(task_id='load_sa_to_staging', bash_command='echo "Load SA"')
+        extract >> transform >> validate >> load
+    
+    @task_group(group_id='process_europe')
+    def process_eu():
+        extract = BashOperator(task_id='extract_eu_data', bash_command='echo "Extract EU"')
+        transform = BashOperator(task_id='transform_eu_data', bash_command='echo "Transform EU with GDPR"')
+        validate = BashOperator(task_id='validate_eu_quality', bash_command='echo "Validate EU"')
+        load = BashOperator(task_id='load_eu_to_staging', bash_command='echo "Load EU"')
+        extract >> transform >> validate >> load
+    
+    @task_group(group_id='process_asia_pacific')
+    def process_apac():
+        extract = BashOperator(task_id='extract_apac_data', bash_command='echo "Extract APAC"')
+        transform = BashOperator(task_id='transform_apac_data', bash_command='echo "Transform APAC"')
+        validate = BashOperator(task_id='validate_apac_quality', bash_command='echo "Validate APAC"')
+        load = BashOperator(task_id='load_apac_to_staging', bash_command='echo "Load APAC"')
+        extract >> transform >> validate >> load
+    
+    # Task Group 6: Aggregate all regions
+    @task_group(group_id='aggregate_all_regions')
+    def aggregate_all():
+        union_all = BashOperator(task_id='union_all_staging_tables', bash_command='echo "UNION 4 regions"')
+        dedupe = BashOperator(task_id='deduplicate_global', bash_command='echo "Deduplicating"')
+        metrics = BashOperator(task_id='calculate_global_metrics', bash_command='echo "Global KPIs"')
+        load_prod = BashOperator(task_id='load_to_production', bash_command='echo "Load to prod"')
+        union_all >> dedupe >> metrics >> load_prod
+    
+    # Task Group 7: Quality checks final
+    @task_group(group_id='quality_checks_final')
+    def quality_checks():
+        row_count = BashOperator(task_id='row_count_validation', bash_command='echo "Checking counts"')
+        freshness = BashOperator(task_id='data_freshness_check', bash_command='echo "Checking freshness"')
+        integrity = BashOperator(task_id='referential_integrity', bash_command='echo "Checking integrity"')
+        report = BashOperator(task_id='send_quality_report', bash_command='echo "Sending report"')
+        [row_count, freshness, integrity] >> report
+    
+    end = EmptyOperator(task_id='end')
+    
+    # Dependencies between task groups
+    init_val = initial_validations_group()
+    na = process_na()
+    sa = process_sa()
+    eu = process_eu()
+    apac = process_apac()
+    agg = aggregate_all()
+    qc = quality_checks()
+    
+    start >> init_val >> [na, sa, eu, apac] >> agg >> qc >> end

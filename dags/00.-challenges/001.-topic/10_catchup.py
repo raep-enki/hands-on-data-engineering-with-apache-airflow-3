@@ -89,4 +89,101 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Crea ambos pipelines con estrategias opuestas de catchup
+# Solución del challenge - DAG 1: Full Refresh (catchup=False)
+with DAG(
+    dag_id='catchup_challenge_full_refresh',
+    start_date=datetime.datetime.now() - datetime.timedelta(days=30),
+    schedule='0 0 * * 1',  # Cada lunes a las 00:00
+    catchup=False,
+    tags=['challenge', 'catchup', 'full_refresh'],
+) as dag1:
+    
+    start = EmptyOperator(task_id='start')
+    
+    truncate_products_table = BashOperator(
+        task_id='truncate_products_table',
+        bash_command='echo "TRUNCATE TABLE products"',
+    )
+    
+    extract_from_source_system = BashOperator(
+        task_id='extract_from_source_system',
+        bash_command='echo "Extracting all products from Oracle"',
+    )
+    
+    validate_completeness = BashOperator(
+        task_id='validate_completeness',
+        bash_command='echo "Validating 100% of records extracted"',
+    )
+    
+    load_to_warehouse = BashOperator(
+        task_id='load_to_warehouse',
+        bash_command='echo "Bulk loading 1M products"',
+    )
+    
+    rebuild_indexes = BashOperator(
+        task_id='rebuild_indexes',
+        bash_command='echo "Rebuilding indexes and statistics"',
+    )
+    
+    notify_refresh_complete = BashOperator(
+        task_id='notify_refresh_complete',
+        bash_command='echo "Notifying analytics team"',
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> truncate_products_table >> extract_from_source_system >> validate_completeness
+    validate_completeness >> load_to_warehouse >> rebuild_indexes >> notify_refresh_complete >> end
+
+# DAG 2: Incremental (catchup=True)
+with DAG(
+    dag_id='catchup_challenge_incremental',
+    start_date=datetime.datetime.now() - datetime.timedelta(days=7),
+    schedule='0 * * * *',  # Cada hora en punto
+    catchup=True,
+    max_active_runs=3,
+    tags=['challenge', 'catchup', 'incremental'],
+) as dag2:
+    
+    start = EmptyOperator(task_id='start')
+    
+    identify_hour_to_process = BashOperator(
+        task_id='identify_hour_to_process',
+        bash_command='echo "Processing hour: {{ logical_date }}"',
+    )
+    
+    extract_transactions_for_hour = BashOperator(
+        task_id='extract_transactions_for_hour',
+        bash_command='echo "Extracting transactions for {{ ds }} {{ logical_date.hour }}:00"',
+    )
+    
+    filter_duplicates = BashOperator(
+        task_id='filter_duplicates',
+        bash_command='echo "Filtering duplicates with timestamp {{ logical_date }}"',
+    )
+    
+    calculate_hourly_aggregations = BashOperator(
+        task_id='calculate_hourly_aggregations',
+        bash_command='echo "Calculating hourly aggregations for {{ ds }}"',
+    )
+    
+    append_to_warehouse = BashOperator(
+        task_id='append_to_warehouse',
+        bash_command='echo "INSERT incremental for hour {{ logical_date }}"',
+    )
+    
+    update_watermark = BashOperator(
+        task_id='update_watermark',
+        bash_command='echo "Marking hour {{ logical_date }} as processed"',
+    )
+    
+    send_hourly_report = BashOperator(
+        task_id='send_hourly_report',
+        bash_command='echo "Sending metrics for hour {{ logical_date }}"',
+    )
+    
+    end = EmptyOperator(task_id='end')
+    
+    start >> identify_hour_to_process >> extract_transactions_for_hour >> filter_duplicates
+    filter_duplicates >> calculate_hourly_aggregations >> append_to_warehouse
+    append_to_warehouse >> update_watermark >> send_hourly_report >> end

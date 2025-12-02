@@ -94,4 +94,157 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import BranchPythonOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Diseña el pipeline resiliente con múltiples trigger rules
+# Solución del challenge
+
+def branch_by_accuracy(**context):
+    # Simulamos una decisión basada en accuracy
+    accuracy = 0.88  # Simulación
+    if accuracy >= 0.85:
+        return 'deploy_model_to_staging'
+    else:
+        return 'notify_poor_performance'
+
+with DAG(
+    dag_id='trigger_rules_challenge',
+    start_date=datetime.datetime(2024, 1, 1),
+    schedule='@daily',
+    catchup=False,
+    tags=['challenge', 'trigger_rules'],
+) as dag:
+    
+    start = EmptyOperator(task_id='start')
+    
+    # 4 fuentes de datos paralelas (pueden fallar)
+    fetch_source_a = BashOperator(task_id='fetch_source_a', bash_command='echo "Fetching source A"')
+    fetch_source_b = BashOperator(task_id='fetch_source_b', bash_command='echo "Fetching source B"')
+    fetch_source_c = BashOperator(task_id='fetch_source_c', bash_command='echo "Fetching source C"')
+    fetch_source_d = BashOperator(task_id='fetch_source_d', bash_command='echo "Fetching source D"')
+    
+    # Agregación con trigger_rule='one_success'
+    aggregate_available_data = BashOperator(
+        task_id='aggregate_available_data',
+        bash_command='echo "Aggregating available data"',
+        trigger_rule='one_success',
+    )
+    
+    # Validación con trigger_rule='all_success' (default)
+    validate_data_quality = BashOperator(
+        task_id='validate_data_quality',
+        bash_command='echo "Validating data quality"',
+    )
+    
+    # Feature engineering con trigger_rule='none_failed'
+    calculate_features = BashOperator(
+        task_id='calculate_features',
+        bash_command='echo "Calculating features"',
+        trigger_rule='none_failed',
+    )
+    
+    # Entrenamiento de 3 modelos en paralelo
+    train_model_xgboost = BashOperator(
+        task_id='train_model_xgboost',
+        bash_command='echo "Training XGBoost model"',
+    )
+    train_model_random_forest = BashOperator(
+        task_id='train_model_random_forest',
+        bash_command='echo "Training Random Forest model"',
+    )
+    train_model_neural_net = BashOperator(
+        task_id='train_model_neural_net',
+        bash_command='echo "Training Neural Net model"',
+    )
+    
+    # Evaluación de modelos
+    evaluate_xgboost = BashOperator(
+        task_id='evaluate_xgboost',
+        bash_command='echo "Evaluating XGBoost: accuracy 0.92"',
+    )
+    evaluate_random_forest = BashOperator(
+        task_id='evaluate_random_forest',
+        bash_command='echo "Evaluating Random Forest: accuracy 0.89"',
+    )
+    evaluate_neural_net = BashOperator(
+        task_id='evaluate_neural_net',
+        bash_command='echo "Evaluating Neural Net: accuracy 0.94"',
+    )
+    
+    # Selección del mejor modelo con trigger_rule='one_success'
+    select_best_model = BashOperator(
+        task_id='select_best_model',
+        bash_command='echo "Selecting best model among available ones"',
+        trigger_rule='one_success',
+    )
+    
+    # Deployment a staging con trigger_rule='none_failed_min_one_success'
+    deploy_to_staging = BashOperator(
+        task_id='deploy_to_staging',
+        bash_command='echo "Deploying to staging"',
+        trigger_rule='none_failed_min_one_success',
+    )
+    
+    # Tests en paralelo
+    test_model_performance = BashOperator(
+        task_id='test_model_performance',
+        bash_command='echo "Testing model performance"',
+    )
+    test_model_accuracy = BashOperator(
+        task_id='test_model_accuracy',
+        bash_command='echo "Testing model accuracy"',
+    )
+    
+    # Deployment a producción con trigger_rule='all_success' (default)
+    deploy_to_production = BashOperator(
+        task_id='deploy_to_production',
+        bash_command='echo "Deploying to production"',
+    )
+    
+    # Notificación de éxito
+    notify_success = BashOperator(
+        task_id='notify_success',
+        bash_command='echo "Sending success notification to Slack"',
+    )
+    
+    # Rollback con trigger_rule='one_failed'
+    rollback_to_previous = BashOperator(
+        task_id='rollback_to_previous',
+        bash_command='echo "Rolling back to previous model"',
+        trigger_rule='one_failed',
+    )
+    
+    # Limpieza garantizada con trigger_rule='all_done'
+    cleanup_temp_files = BashOperator(
+        task_id='cleanup_temp_files',
+        bash_command='echo "Cleaning up temp files"',
+        trigger_rule='all_done',
+    )
+    
+    release_resources = BashOperator(
+        task_id='release_resources',
+        bash_command='echo "Releasing GPU and memory"',
+        trigger_rule='all_done',
+    )
+    
+    end = EmptyOperator(task_id='end', trigger_rule='all_done')
+    
+    # Dependencies
+    start >> [fetch_source_a, fetch_source_b, fetch_source_c, fetch_source_d]
+    [fetch_source_a, fetch_source_b, fetch_source_c, fetch_source_d] >> aggregate_available_data
+    aggregate_available_data >> validate_data_quality >> calculate_features
+    
+    calculate_features >> [train_model_xgboost, train_model_random_forest, train_model_neural_net]
+    
+    train_model_xgboost >> evaluate_xgboost
+    train_model_random_forest >> evaluate_random_forest
+    train_model_neural_net >> evaluate_neural_net
+    
+    [evaluate_xgboost, evaluate_random_forest, evaluate_neural_net] >> select_best_model
+    select_best_model >> deploy_to_staging
+    
+    deploy_to_staging >> [test_model_performance, test_model_accuracy]
+    [test_model_performance, test_model_accuracy] >> deploy_to_production
+    
+    deploy_to_production >> notify_success
+    [test_model_performance, test_model_accuracy] >> rollback_to_previous
+    
+    [notify_success, rollback_to_previous] >> cleanup_temp_files
+    cleanup_temp_files >> release_resources >> end
