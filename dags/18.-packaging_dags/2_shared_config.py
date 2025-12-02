@@ -49,7 +49,7 @@ with DAG(
     start_date=datetime.datetime(2021, 1, 1),
     catchup=False,
     default_args=COMMON_DEFAULT_ARGS,
-    tags=['example', 'packaging_dags']]
+    tags=['example', 'packaging_dags']
 ) as dag:
     
     start = EmptyOperator(task_id='start')
