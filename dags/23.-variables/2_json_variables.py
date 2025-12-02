@@ -48,9 +48,10 @@ def use_database_config():
     print("🗄️ Leyendo config de DB...")
     
     # Leer y deserializar JSON
-    db_config = Variable.get("database_config",
-                             default='{"host": "localhost"}',
-                             deserialize_json=True)
+    try:
+        db_config = Variable.get("database_config", deserialize_json=True)
+    except Exception:  # AirflowRuntimeError en Airflow 3.x
+        db_config = {"host": "localhost"}
     
     host = db_config.get('host')
     port = db_config.get('port', 5432)
@@ -67,9 +68,10 @@ def use_api_config():
     """Usa configuración de API"""
     print("🌐 Leyendo config de API...")
     
-    api_config = Variable.get("api_config",
-                              default='{}',
-                              deserialize_json=True)
+    try:
+        api_config = Variable.get("api_config", deserialize_json=True)
+    except Exception:  # AirflowRuntimeError en Airflow 3.x
+        api_config = {}
     
     base_url = api_config.get('base_url', 'https://api.default.com')
     endpoints = api_config.get('endpoints', {})

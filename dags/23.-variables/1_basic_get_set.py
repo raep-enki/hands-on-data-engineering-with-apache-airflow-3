@@ -33,7 +33,10 @@ def read_json_variable():
     print("📖 Leyendo variable JSON...")
     
     # Variable como JSON (deserialize_json=True)
-    config = Variable.get("app_config", default='{}', deserialize_json=True)
+    try:
+        config = Variable.get("app_config", deserialize_json=True)
+    except Exception:  # AirflowRuntimeError en Airflow 3.x
+        config = {}
     
     # Si no existe, retorna {}
     print(f"  - Config: {config}")
