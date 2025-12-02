@@ -38,65 +38,11 @@ README.md
 
 Esto le dice a Airflow: "ignora config/ completo, ignora archivos compilados, ignora git".
 
-**Ejemplo de módulo compartido (config/validators.py):**
+**Tu tarea:**
 
-```python
-def validate_schema(data, expected_columns):
-    """Valida que data tenga las columnas esperadas"""
-    print(f"Validating schema: {expected_columns}")
-    # Lógica de validación
-    return True
-
-def validate_nulls(data, columns):
-    """Valida que columnas críticas no tengan nulls"""
-    print(f"Checking nulls in: {columns}")
-    return True
-
-def validate_duplicates(data, key_columns):
-    """Valida que no haya duplicados en key columns"""
-    print(f"Checking duplicates on: {key_columns}")
-    return True
-```
-
-**Ejemplo de módulo compartido (config/connectors.py):**
-
-```python
-def connect_to_aws(region='us-east-1'):
-    """Conecta a AWS S3 en región especificada"""
-    print(f"Connecting to AWS {region}")
-    return f"aws_connection_{region}"
-
-def connect_to_gcp(project='my-project'):
-    """Conecta a GCP BigQuery en proyecto especificado"""
-    print(f"Connecting to GCP {project}")
-    return f"gcp_connection_{project}"
-```
-
-**Ejemplo de módulo compartido (config/transformers.py):**
-
-```python
-def normalize_dates(data):
-    """Convierte fechas a formato ISO"""
-    print("Normalizing dates to ISO format")
-    return data
-
-def convert_currency(data, from_currency, to_currency):
-    """Convierte montos de una moneda a otra"""
-    print(f"Converting {from_currency} to {to_currency}")
-    return data
-```
-
-**El DAG multi_cloud_etl.py que usa los helpers:**
-
-```python
-import datetime
-from airflow.sdk import DAG
-from airflow.providers.standard.operators.python import PythonOperator
-
-# Importar helpers compartidos
-from config.validators import validate_schema, validate_nulls
-from config.connectors import connect_to_aws, connect_to_gcp
-from config.transformers import normalize_dates, convert_currency
+Crea módulos compartidos en config/ (validators.py, connectors.py, transformers.py) y un DAG
+multi_cloud_etl.py que los importe y use. El DAG debe procesar datos de AWS y GCP usando
+funciones compartidas.
 
 def extract_from_aws(**context):
     conn = connect_to_aws('us-east-1')
@@ -160,6 +106,8 @@ with DAG(
 """
 
 import datetime
+import sys
+import os
 
 from airflow.sdk import DAG
 from airflow.providers.standard.operators.python import PythonOperator

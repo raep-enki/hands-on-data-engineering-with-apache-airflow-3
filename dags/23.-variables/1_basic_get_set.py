@@ -9,8 +9,7 @@ que puede ser accedida desde cualquier DAG.
 
 import datetime
 
-from airflow.sdk import DAG, task
-from airflow.models import Variable
+from airflow.sdk import DAG, task, Variable
 
 
 @task
@@ -19,8 +18,8 @@ def read_simple_variable():
     print("📖 Leyendo variable simple...")
     
     # Leer variable (con default si no existe)
-    api_key = Variable.get("api_key", default_var="default_key")
-    environment = Variable.get("environment", default_var="production")
+    api_key = Variable.get("api_key", default="default_key")
+    environment = Variable.get("environment", default="production")
     
     print(f"  - API Key: {api_key[:5]}... (truncated)")
     print(f"  - Environment: {environment}")
@@ -34,7 +33,7 @@ def read_json_variable():
     print("📖 Leyendo variable JSON...")
     
     # Variable como JSON (deserialize_json=True)
-    config = Variable.get("app_config", default_var='{}', deserialize_json=True)
+    config = Variable.get("app_config", default='{}', deserialize_json=True)
     
     # Si no existe, retorna {}
     print(f"  - Config: {config}")
@@ -52,7 +51,7 @@ def read_json_variable():
 @task
 def use_variables_in_logic(config: dict):
     """Usa variables en lógica de negocio"""
-    environment = Variable.get("environment", default_var="production")
+    environment = Variable.get("environment", default="production")
     
     print(f"🔧 Ejecutando en environment: {environment}")
     
@@ -128,7 +127,7 @@ from airflow.models import Variable
 value = Variable.get("api_key")
 
 # Con default
-value = Variable.get("api_key", default_var="default")
+value = Variable.get("api_key", default="default")
 
 # JSON
 config = Variable.get("config", deserialize_json=True)

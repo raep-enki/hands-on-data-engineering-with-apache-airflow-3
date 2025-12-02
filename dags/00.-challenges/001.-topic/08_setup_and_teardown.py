@@ -73,6 +73,7 @@ import datetime
 
 from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import BranchPythonOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
 # TODO: Implementa el DAG según los requisitos

@@ -119,6 +119,7 @@ usa `execution_timeout` como proxy para simular deadlines por tarea.
 """
 
 import datetime
+from datetime import timedelta
 
 from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator

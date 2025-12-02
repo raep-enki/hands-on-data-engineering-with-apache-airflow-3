@@ -7,8 +7,7 @@ Para secrets, usar Airflow Connections o Secret Backend.
 
 import datetime
 
-from airflow.sdk import DAG, task
-from airflow.models import Variable
+from airflow.sdk import DAG, task, Variable
 
 
 @task
@@ -17,8 +16,8 @@ def read_variables_safely():
     print("🔐 Leyendo variables de forma segura...")
     
     # ✅ Siempre con default
-    batch_size = int(Variable.get("batch_size", default_var="1000"))
-    timeout = int(Variable.get("timeout_seconds", default_var="300"))
+    batch_size = int(Variable.get("batch_size", default="1000"))
+    timeout = int(Variable.get("timeout_seconds", default="300"))
     
     # Validación
     if batch_size <= 0:
@@ -61,14 +60,14 @@ def good_practices_demo():
     print("✅ Buenas prácticas...")
     
     # ✅ Configuración no sensible
-    region = Variable.get("aws_region", default_var="us-east-1")
-    environment = Variable.get("environment", default_var="production")
+    region = Variable.get("aws_region", default="us-east-1")
+    environment = Variable.get("environment", default="production")
     
     # ✅ Feature flags
-    enable_feature = Variable.get("feature_x", default_var="false") == "true"
+    enable_feature = Variable.get("feature_x", default="false") == "true"
     
     # ✅ Configuración de comportamiento
-    max_retries = int(Variable.get("max_retries", default_var="3"))
+    max_retries = int(Variable.get("max_retries", default="3"))
     
     print(f"  ✅ Region: {region}")
     print(f"  ✅ Environment: {environment}")
@@ -132,7 +131,7 @@ backend = airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBac
 
 ## Validación:
 ```python
-batch_size = int(Variable.get("batch_size", default_var="1000"))
+batch_size = int(Variable.get("batch_size", default="1000"))
 if batch_size <= 0:
     batch_size = 1000  # Fallback
 ```

@@ -44,7 +44,7 @@ El `dag.doc_md` debe explicar: propósito del negocio, arquitectura (Kafka → E
 SLAs esperados (99.9% uptime, <500ms latency), qué hacer en caso de incidente, enlaces a runbooks.
 
 Cada tarea necesita `task.doc_md` con formato Markdown: título, descripción, inputs/outputs, configuración,
-troubleshooting. Ejemplo: "# Enrich User Data\n\nConsulta PostgreSQL...\n\n## Troubleshooting\n- Si timeout..."
+y troubleshooting.
 
 **Configuración técnica:**
 - DAG ID: `fraud_detection_realtime`

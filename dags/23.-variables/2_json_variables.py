@@ -7,8 +7,7 @@ que puede ser accedida y deserializada automáticamente.
 
 import datetime
 
-from airflow.sdk import DAG, task
-from airflow.models import Variable
+from airflow.sdk import DAG, task, Variable
 
 
 @task
@@ -49,8 +48,8 @@ def use_database_config():
     print("🗄️ Leyendo config de DB...")
     
     # Leer y deserializar JSON
-    db_config = Variable.get("database_config", 
-                             default_var='{"host": "localhost"}',
+    db_config = Variable.get("database_config",
+                             default='{"host": "localhost"}',
                              deserialize_json=True)
     
     host = db_config.get('host')
@@ -69,7 +68,7 @@ def use_api_config():
     print("🌐 Leyendo config de API...")
     
     api_config = Variable.get("api_config",
-                              default_var='{}',
+                              default='{}',
                               deserialize_json=True)
     
     base_url = api_config.get('base_url', 'https://api.default.com')

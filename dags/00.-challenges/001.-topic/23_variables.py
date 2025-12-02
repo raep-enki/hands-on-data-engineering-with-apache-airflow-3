@@ -18,7 +18,6 @@ para configuración multi-environment. Tags: `['challenge', 'variables']`.
 
 import datetime
 
-from airflow.sdk import DAG, task
-from airflow.models import Variable
+from airflow.sdk import DAG, task, Variable
 
 # TODO: Implementa funciones @task que usen Variables de Airflow

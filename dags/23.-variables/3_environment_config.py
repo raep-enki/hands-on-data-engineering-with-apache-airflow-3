@@ -7,14 +7,13 @@ Patrón común: variable 'environment' controla otras configs.
 
 import datetime
 
-from airflow.sdk import DAG, task
-from airflow.models import Variable
+from airflow.sdk import DAG, task, Variable
 
 
 @task
 def get_environment_config():
     """Lee configuración según environment"""
-    env = Variable.get("environment", default_var="production")
+    env = Variable.get("environment", default="production")
     
     print(f"🌍 Environment: {env}")
     
@@ -82,7 +81,7 @@ dag.doc_md = """
 
 ## Pattern:
 ```python
-env = Variable.get("environment", default_var="production")
+env = Variable.get("environment", default="production")
 
 if env == "development":
     use_test_data()
