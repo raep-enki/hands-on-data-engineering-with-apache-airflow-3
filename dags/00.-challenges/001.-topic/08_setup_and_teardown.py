@@ -1,57 +1,72 @@
 """
-DESAFÍO: Pipeline de Machine Learning con Setup y Teardown
+Challenge: El Modelo de ML Que Deja Recursos Sin Limpiar
 
-Crea un DAG que implemente un pipeline completo de entrenamiento de modelo
-con manejo robusto de recursos usando setup/teardown.
+Tu equipo entrena modelos de ML semanalmente, pero hay un problema: si algo falla a mitad del proceso,
+quedan directorios temporales ocupando espacio (200GB+ de basura), conexiones a bases de datos abiertas
+(agota el connection pool), y GPUs reservadas que nadie libera ($50/hora desperdiciado).
 
-REQUISITOS:
+Necesitas implementar el pattern setup/teardown de Airflow 3.x: tareas que preparan recursos y
+GARANTIZAN su limpieza, falle o no el proceso principal. Es como try-finally pero declarativo.
 
-1. DAG Configuration:
-   - dag_id: 'ml_training_pipeline'
-   - schedule: '@weekly'
-   - Usar tags apropiados
+**El flujo con setup/teardown:**
 
-2. Setup Phase:
-   - Crear un directorio temporal para datasets
-   - Inicializar conexión a la base de datos de features
-   - Configurar ambiente de GPU/CPU
+`start` (EmptyOperator) se ramifica a 3 setups en paralelo:
 
-3. Data Phase (después del setup):
-   - Extraer features de la base de datos
-   - Descargar dataset de entrenamiento
-   - Validar calidad de datos
+**Setups (preparan recursos):**
+- `setup_temp_directories` (BashOperator - crea /tmp/ml_training/, /tmp/datasets/, /tmp/models/)
+- `setup_database_connection` (BashOperator - abre connection pool a PostgreSQL, max 10 connections)
+- `setup_gpu_allocation` (BashOperator - reserva 2x NVIDIA A100 en cloud)
 
-4. Training Phase (después de data phase):
-   - Preprocesar datos
-   - Entrenar modelo (tarea principal)
-   - Validar modelo
+**Work tasks (dependen de setups):**
+`[todos los setups]` >> `validate_prerequisites` (BashOperator - verifica Python packages instalados,
+libcuda disponible, espacio en disco suficiente) >>
 
-5. Deployment Phase (después de training):
-   - Guardar modelo en registro
-   - Actualizar configuración de producción
+`download_training_data` (BashOperator - descarga 50GB desde S3 a /tmp/datasets/) >>
 
-6. Teardown Phase (debe ejecutarse siempre):
-   - Eliminar directorio temporal
-   - Cerrar conexión a base de datos
-   - Liberar recursos de GPU/CPU
-   - Limpiar cache de entrenamiento
+`split_train_test` (BashOperator - divide en train 80% / test 20%) >>
 
-7. Post-Processing (después del teardown):
-   - Generar reporte de métricas
-   - Enviar notificación al equipo
+Se ramifica en 2 validaciones paralelas:
+- `validate_training_data` (BashOperator - verifica formato, missing values, outliers)
+- `validate_test_data` (BashOperator - verifica misma estructura que train)
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator y EmptyOperator
-- El teardown DEBE ejecutarse incluso si alguna tarea de training falla
-- Demostrar conocimiento del método .as_teardown(setups=...)
-- Incluir al menos 12 tareas en total
-- Las tareas de data phase deben ejecutarse en paralelo
-- El teardown debe limpiar TODOS los recursos del setup
+`[ambas validaciones]` >> `train_model` (BashOperator - entrena XGBoost en GPU, puede tardar 2hrs) >>
 
-NOTAS:
-- Los comandos bash pueden ser simples echo statements
-- Enfócate en la estructura correcta del flujo
-- Asegúrate que el teardown referencia correctamente el setup
+`evaluate_model` (BashOperator - calcula accuracy, precision, recall en test set) >>
+
+`branch_by_performance` (BranchPythonOperator - decide según accuracy):
+- Si accuracy >= 0.85 >> `deploy_model_to_staging` (BashOperator - copia modelo a S3)
+- Si accuracy < 0.85 >> `notify_poor_performance` (BashOperator - envía alerta a Slack)
+
+**Teardowns (limpian recursos SIEMPRE, con .as_teardown()):**
+
+Cada setup tiene su teardown correspondiente usando `.as_teardown(setups=...)`:
+
+`cleanup_temp_directories` (BashOperator - borra /tmp/ml_training/, libera 200GB).as_teardown(setups=setup_temp_directories)
+`cleanup_database_connection` (BashOperator - cierra connections, libera pool).as_teardown(setups=setup_database_connection)
+`cleanup_gpu_allocation` (BashOperator - libera GPUs, detiene instancias cloud).as_teardown(setups=setup_gpu_allocation)
+
+**Flujo de dependencies:**
+Los teardowns se ejecutan automáticamente después del último work task que depende de su setup,
+sin importar si hubo éxito o falla. Así garantizas limpieza.
+
+`[deploy_model_to_staging, notify_poor_performance]` >> [todos los teardowns] >> `end` (EmptyOperator)
+
+**Patrón clave:**
+```python
+s1 = BashOperator(task_id='setup_temp_directories', ...)
+work = BashOperator(task_id='train_model', ...)
+t1 = BashOperator(task_id='cleanup_temp_directories', ...).as_teardown(setups=s1)
+
+s1 >> work >> t1  # t1 se ejecuta SIEMPRE después de work
+```
+
+**Configuración técnica:**
+- DAG ID: `ml_training_pipeline`
+- Schedule: @weekly (cada domingo a las 00:00)
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'setup_and_teardown']`
+- 3 pares setup/teardown (total 6 tareas), más 10+ work tasks
 """
 
 import datetime

@@ -1,166 +1,98 @@
 """
-DESAFÍO: Sistema de Backfill Inteligente
+Challenge: Migración de Sistema Legacy a Uno Nuevo
 
-Crea un sistema de backfill que detecta, valida y reprocesa datos
-automáticamente cuando sea necesario.
+La empresa decidió migrar de un sistema legacy (Oracle 11g) a uno moderno (Snowflake).
+Tienes 90 días de datos históricos (enero - marzo 2024) que necesitas mover. No puedes hacerlo
+todo de golpe: son 5 millones de registros por día que sobrecargarían la red y el sistema.
 
-CONTEXTO:
-Eres el Data Engineer de una empresa de e-commerce. Tu data warehouse
-tiene problemas ocasionales de calidad de datos y necesitas un sistema
-robusto de backfill que:
-- Detecte automáticamente datos faltantes o corruptos
-- Valide calidad antes y después de procesamiento
-- Permita reprocesamiento eficiente de períodos específicos
-- Maneje dependencies entre tablas
+La estrategia: backfill controlado procesando día por día, pero corriendo máximo 3 días en paralelo
+para optimizar sin saturar. Cada día es independiente: si falla uno, los demás continúan.
 
-REQUISITOS:
+**El flujo de migración (idempotente y resiliente):**
 
-1. DAG: Data Quality Monitoring & Gap Detection
-   - dag_id: 'backfill_challenge_quality_monitor'
-   - schedule: '@hourly' (verifica calidad cada hora)
-   - start_date: 3 días atrás
-   - catchup: False
-   - max_active_runs: 3
-   - Tags: incluir 'challenge', 'dag_runs', 'backfill', 'monitoring'
-   
-   Pipeline (8 tareas mínimo):
-   - start
-   - scan_date_range (últimos 7 días)
-   - detect_missing_partitions (identifica gaps)
-   - validate_existing_data (checks de calidad)
-   - check_row_counts (comparar con expected)
-   - check_null_percentages
-   - check_business_rules
-   - log_quality_issues (guardar problemas encontrados)
-   - end
-   
-   Validaciones en bash_command:
-   - Simular detección de 3 fechas con datos faltantes
-   - Simular detección de 2 fechas con calidad baja
-   - Usar {{ ds }} para mostrar fecha de monitoreo
+`start` >> `identify_migration_date` (BashOperator - usa {{ logical_date }} para saber qué día migrar,
+imprime fecha para debugging) >>
 
-2. DAG: Backfill Execution Pipeline
-   - dag_id: 'backfill_challenge_executor'
-   - schedule: '@daily'
-   - start_date: 30 días atrás
-   - catchup: False (backfill será manual)
-   - max_active_runs: 5 (procesar 5 días en paralelo)
-   - Tags: incluir 'challenge', 'dag_runs', 'backfill', 'executor'
-   
-   Pipeline (10 tareas mínimo):
-   - start
-   - validate_partition_clean (verificar que partición no existe o está limpia)
-   - create_staging_partition
-   - extract_orders (orders para {{ ds }})
-   - extract_customers (customers para {{ ds }})
-   - validate_source_quality (checks en datos source)
-   - join_and_transform
-   - load_to_partition (específica de {{ ds }})
-   - validate_output_quality
-   - mark_partition_complete (metadata)
-   - end
-   
-   Debe mostrar:
-   - Uso de particiones por fecha
-   - Idempotencia (limpiar antes de cargar)
-   - Validaciones pre y post
-   - Uso correcto de {{ ds }}, {{ ds_nodash }}
+`check_if_already_migrated` (BashOperator - consulta tabla de control `migration_log` en Snowflake,
+busca registro con fecha={{ logical_date }} y status='completed'. Si existe, retorna código 0 y
+las tareas siguientes se skipean vía branch. Esto garantiza idempotencia) >>
 
-3. DAG: Cascade Backfill (Dependencies)
-   - dag_id: 'backfill_challenge_cascade'
-   - schedule: '@daily'
-   - start_date: 7 días atrás
-   - catchup: False
-   - Tags: incluir 'challenge', 'dag_runs', 'backfill', 'cascade'
-   
-   Simula tabla dimension que depende de tabla fact.
-   
-   Pipeline (9 tareas mínimo):
-   - start
-   - check_fact_table_ready (verificar que fact data existe para {{ ds }})
-   - wait_for_dependencies (simular espera)
-   - extract_fact_data
-   - compute_dimensions
-   - validate_dimension_integrity (foreign keys, etc)
-   - load_dimension_partition
-   - update_dependencies_metadata
-   - trigger_downstream_notification
-   - end
-   
-   Debe explicar en doc_md:
-   - Orden correcto de backfill cuando hay dependencies
-   - Qué pasa si fact table no tiene datos para una fecha
-   - Estrategia de backfill en cascada
+`branch_skip_or_continue` (BranchPythonOperator - si ya migrado >> `skip_already_done`, 
+si no migrado >> `extract_from_legacy`) >>
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator, EmptyOperator
-- CADA bash_command debe mostrar uso de macros ({{ ds }}, {{ logical_date }}, etc)
-- Incluir validaciones específicas con echo simulando checks reales
-- Demostrar idempotencia en cada pipeline
-- No usar sensors (solo bash checks)
+**Path 1: Si ya está migrado (idempotencia):**
+`skip_already_done` (EmptyOperator - solo para logging) >> `end`
 
-DOCUMENTACIÓN REQUERIDA:
-CADA DAG debe tener doc_md extenso explicando:
-1. Propósito del DAG
-2. Cómo se usa en el proceso de backfill
-3. Comandos CLI para ejecutar backfill
-4. Qué validaciones hace y por qué
-5. Estrategia de recovery en caso de fallo
+**Path 2: Si necesita migración (path principal):**
+`extract_from_legacy` (BashOperator - ejecuta query en Oracle:
+`SELECT * FROM transactions WHERE DATE(created_at) = '{{ ds }}'`
+Export a CSV en /tmp/migration_{{ ds }}.csv, puede tardar 10 min por día) >>
 
-ESCENARIOS A CUBRIR:
+`validate_extract` (BashOperator - verifica: archivo existe, no está vacío, count de filas coincide
+con lo esperado para esa fecha, no hay filas con NULL en campos críticos) >>
 
-**Monitoring DAG debe detectar:**
-- Particiones faltantes (gaps en fechas)
-- Datos con calidad baja (row count bajo, nulls altos)
-- Violaciones de business rules
+Se ramifica en 3 validaciones paralelas:
+- `validate_data_types` (BashOperator - verifica que columnas tengan tipos correctos)
+- `validate_business_rules` (BashOperator - amounts > 0, dates válidas, IDs únicos)
+- `validate_referential_integrity` (BashOperator - customer_ids existen en tabla customers)
 
-**Executor DAG debe manejar:**
-- Backfill de fecha específica
-- Backfill de rango de fechas
-- Reprocessamiento idempotente
-- Validación pre y post carga
+`[todas las validaciones]` >> `transform_to_snowflake_format` (BashOperator - convierte:
+fechas Oracle → timestamps Snowflake, NULLs Oracle → NULL Snowflake, encoding ISO-8859-1 → UTF-8) >>
 
-**Cascade DAG debe manejar:**
-- Dependencies entre tablas
-- Validación de integridad referencial
-- Backfill en orden correcto
+`stage_to_s3` (BashOperator - sube CSV transformado a S3: s3://migration-bucket/{{ ds }}/data.csv
+necesario porque Snowflake carga desde S3 más rápido que directo) >>
 
-COMANDOS CLI A INCLUIR EN DOC_MD:
-
-```bash
-# Backfill de rango
-airflow dags backfill \\
-    --start-date YYYY-MM-DD \\
-    --end-date YYYY-MM-DD \\
-    [dag_id]
-
-# Backfill paralelo
-airflow dags backfill \\
-    --start-date YYYY-MM-DD \\
-    --end-date YYYY-MM-DD \\
-    --max-active-runs 5 \\
-    [dag_id]
-
-# Clear y re-ejecutar
-airflow tasks clear \\
-    --start-date YYYY-MM-DD \\
-    --end-date YYYY-MM-DD \\
-    [dag_id]
+`load_to_snowflake` (BashOperator - ejecuta COPY INTO en Snowflake:
+```sql
+COPY INTO transactions_new 
+FROM s3://migration-bucket/{{ ds }}/
+FILE_FORMAT = (TYPE=CSV FIELD_DELIMITER=',' SKIP_HEADER=1)
+ON_ERROR = 'ABORT'
 ```
+Si hay error, falla el día completo pero otros días continúan) >>
 
-VALIDACIONES REQUERIDAS:
-- Row count: "Expected 10000, Actual 10000"
-- Null checks: "critical_field nulls: 0%"
-- Business rules: "revenue = price * quantity (validated)"
-- Referential integrity: "All foreign keys valid"
-- Date range: "All dates within {{ ds }}"
+`verify_row_counts` (BashOperator - compara count en Oracle vs Snowflake para {{ ds }},
+deben ser exactamente iguales. Si difiere, falla y rollback) >>
 
-TIPS:
-- Usar particiones para eficiencia
-- Validar antes de procesar (fail fast)
-- Limpiar partición antes de cargar (idempotencia)
-- Loggear todos los quality checks
-- Pensar en el orden cuando hay dependencies
+`update_migration_log` (BashOperator - inserta en tabla de control:
+`INSERT INTO migration_log (date, status, row_count, completed_at) 
+VALUES ('{{ ds }}', 'completed', {{ row_count }}, NOW())`
+Esto previene reprocesar en futuras corridas) >>
+
+`cleanup_temp_files` (BashOperator con `trigger_rule='all_done'` - borra CSV de /tmp/
+y archivos de S3 staging, se ejecuta SIEMPRE incluso si hubo falla) >>
+
+`end` (EmptyOperator con `trigger_rule='none_failed_min_one_success'`)
+
+**Resiliencia ante fallas:**
+Si el día 45 falla (datos corruptos, conexión perdida), los días 46-90 continúan independientes.
+Puedes re-correr solo el día 45 después de arreglar el problema.
+
+**Control de paralelismo:**
+`max_active_runs=3` significa que procesa máximo 3 días simultáneos. Airflow automáticamente
+encola los demás y los procesa conforme se van liberando slots. Esto evita saturar:
+- Network bandwidth (3 CSVs viajando simultáneos, no 90)
+- Oracle connections (3 queries concurrentes, no 90)
+- Snowflake warehouse (3 cargas paralelas, no 90)
+
+**Tracking de progreso:**
+La tabla `migration_log` te permite saber en todo momento:
+- Qué días completaron: `SELECT * FROM migration_log WHERE status='completed'`
+- Qué días faltan: comparar rango de fechas vs registros en log
+- Qué días fallaron: buscar en Airflow logs donde status=failed
+
+**Idempotencia garantizada:**
+Si corres el DAG dos veces, `check_if_already_migrated` detecta que ya existe en `migration_log`
+y skippea todo el procesamiento. No hay duplicados.
+
+**Configuración técnica:**
+- DAG ID: `migration_backfill_pipeline`
+- Schedule: @daily
+- Start date: 90 días atrás desde hoy (usa `datetime.datetime.now() - datetime.timedelta(days=90)`)
+- **Catchup: True** (crítico! debe procesar los 90 días)
+- **max_active_runs: 3** (controla paralelismo, no saturar sistemas)
+- Tags: `['challenge', 'backfill', 'migration']`
+- Total: 15 tareas con paths condicionales y limpieza garantizada
 """
 
 import datetime
@@ -169,7 +101,4 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Implementa los 3 DAGs según los requisitos
-# 1. Quality Monitor: Detecta problemas
-# 2. Executor: Ejecuta backfill con validaciones
-# 3. Cascade: Maneja dependencies entre tablas
+# TODO: Diseña el pipeline de migración con backfill controlado

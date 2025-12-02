@@ -1,167 +1,114 @@
 """
-# DESAFÍO: Sistema de Procesamiento Multi-Región con Factory Pattern
+Challenge: 16 DAGs Casi Idénticos (Escribir Menos, Lograr Más)
 
-## Objetivo
-Crear un sistema de DAGs que procese datos para múltiples regiones y departamentos
-usando patrones de carga dinámica, factory functions y carga condicional.
+Tu empresa tiene 4 regiones (US, EU, APAC, LATAM) y 4 departamentos (Sales, Marketing, Finance, Operations).
+Cada combinación necesita su propio pipeline ETL. Eso son 4 × 4 = **16 DAGs**. Podrías copiar-pegar
+código 16 veces, pero eso es una pesadilla de mantenimiento: si cambias la lógica de validación,
+tienes que editarlo 16 veces.
 
-## Requisitos
+La solución: una **factory function** que genere DAGs dinámicamente. Le pasas región y departamento,
+y te devuelve un DAG configurado. Cambias una línea en la factory, y los 16 se actualizan.
+Es el principio DRY (Don't Repeat Yourself) aplicado a pipelines.
 
-### 1. Configuración Base
+**Características diferenciadas por departamento:**
 
-Define las siguientes estructuras de datos:
+- **Sales**: Crítico, corre cada hora, timeout 30 min
+- **Marketing**: Importante, corre cada 6 horas, timeout 2 hrs
+- **Finance**: Regulado, corre diario a las 02:00 AM, timeout 4 hrs
+- **Operations**: Batch, corre diario a las 01:00 AM, timeout 6 hrs
+
+**El flujo base (igual para todos, pero parametrizado):**
+
+`start` >> `extract_from_source` (BashOperator - extrae de sistema legacy de la región,
+comando incluye nombre de región: `aws s3 cp s3://data-{region}/ ...`) >>
+
+`validate_raw_data` (BashOperator - verifica schema, nulls, duplicados. Timeout varía por depto) >>
+
+`transform_data` (BashOperator - aplica business rules del departamento. Usa config específica:
+Sales calcula comisiones, Marketing calcula ROI, Finance calcula impuestos, Operations calcula costos) >>
+
+`quality_check` (BashOperator - valida output cumple estándares. QA más estricto para Finance) >>
+
+`load_to_warehouse` (BashOperator - carga a Snowflake tabla: `{region}_{depto}_data`) >>
+
+`notify_completion` (BashOperator - envía email a equipo correspondiente) >> `end`
+
+**La factory function debe verse así:**
 
 ```python
-# Regiones a procesar
-REGIONES = ['norte', 'sur', 'centro', 'caribe']
-
-# Departamentos por región
-DEPARTAMENTOS = {
-    'ventas': {'schedule': '@hourly', 'prioridad': 'alta'},
-    'marketing': {'schedule': '0 */6 * * *', 'prioridad': 'media'},
-    'operaciones': {'schedule': '@daily', 'prioridad': 'media'},
-    'finanzas': {'schedule': '0 2 * * *', 'prioridad': 'alta'}
-}
-
-# Variable de entorno para control
-MODO = os.getenv('PROCESAMIENTO_MODO', 'completo')  # 'completo' o 'solo_criticos'
+def create_etl_dag(region, department):
+    # Config específica por departamento
+    dept_config = {
+        'sales': {'schedule': '@hourly', 'timeout': 30},
+        'marketing': {'schedule': '0 */6 * * *', 'timeout': 120},
+        'finance': {'schedule': '0 2 * * *', 'timeout': 240},
+        'operations': {'schedule': '0 1 * * *', 'timeout': 360}
+    }
+    
+    config = dept_config[department.lower()]
+    
+    dag = DAG(
+        dag_id=f'etl_{region.lower()}_{department.lower()}',
+        schedule=config['schedule'],
+        start_date=datetime.datetime(2024, 1, 1),
+        catchup=False,
+        tags=['challenge', 'loading_dags', region.lower(), department.lower()]
+    )
+    
+    with dag:
+        start = EmptyOperator(task_id='start')
+        
+        extract = BashOperator(
+            task_id='extract_from_source',
+            bash_command=f'echo "Extracting from {region} {department}"',
+            execution_timeout=timedelta(minutes=config['timeout'])
+        )
+        
+        # ... demás tareas
+        
+        start >> extract >> ... >> end
+    
+    return dag
 ```
 
-### 2. Función Factory Requerida
+**Generación de los 16 DAGs:**
 
-Crea una función `crear_dag_regional()` que:
-- Acepte parámetros: `region`, `departamento`, `schedule`, `prioridad`
-- Retorne un DAG configurado
-- DAG ID formato: `procesar_{region}_{departamento}`
-- Description: "Procesar datos de {departamento} para región {region}"
-- Tags: `['challenge', 'core_concepts', 'dags', 'loading_dags', region, departamento, prioridad]`
+```python
+REGIONS = ['US', 'EU', 'APAC', 'LATAM']
+DEPARTMENTS = ['Sales', 'Marketing', 'Finance', 'Operations']
 
-La función debe crear las siguientes tareas (usar solo BashOperator y EmptyOperator):
-1. **inicio** (EmptyOperator)
-2. **conectar_sistema** (BashOperator) - mensaje: "Conectando a sistema de {departamento}"
-3. **extraer_datos_regionales** (BashOperator) - mensaje: "Extrayendo datos de {region}"
-4. **validar_datos** (BashOperator) - mensaje: "Validando datos de {departamento}"
-5. **procesar_datos** (BashOperator) - mensaje: "Procesando datos de {region} - {departamento}"
-6. **generar_reporte** (BashOperator) - mensaje: "Generando reporte para {region}"
-7. **fin** (EmptyOperator)
-
-Dependencias: inicio >> conectar >> extraer >> validar >> procesar >> generar >> fin
-
-### 3. Generación Dinámica de DAGs
-
-Usa bucles anidados para:
-- Iterar sobre todas las regiones
-- Iterar sobre todos los departamentos
-- Llamar a la función factory para cada combinación
-- Asignar cada DAG a `globals()` con el nombre correcto
-
-### 4. Carga Condicional
-
-Si `MODO == 'solo_criticos'`:
-- Solo crear DAGs donde `prioridad == 'alta'`
-- Agregar tag adicional: 'critico'
-
-Si `MODO == 'completo'`:
-- Crear DAGs para todos los departamentos
-
-### 5. DAG de Resumen
-
-Crear un DAG manual llamado `resumen_procesamiento_regional` que:
-- No tenga schedule (trigger manual)
-- Tenga una tarea BashOperator que muestre:
-  * Total de regiones configuradas
-  * Total de departamentos configurados
-  * Modo de operación actual
-  * Lista de todas las combinaciones de DAGs creados
-  * Conteo de DAGs críticos vs no críticos
-
-### 6. DAG de Monitoreo por Región
-
-Para cada región, crear un DAG adicional `monitoreo_{region}` que:
-- Schedule: `0 8 * * *` (8 AM diario)
-- Tenga tareas que muestren el estado de todos los departamentos de esa región
-- Use solo BashOperator con echo para mostrar información
-
-## Estructura Esperada de Archivos
-
-Todo debe estar en un solo archivo: `challenge.py`
-
-## Cálculo Esperado de DAGs
-
-- Regiones: 4
-- Departamentos: 4
-- DAGs principales: 4 × 4 = 16 (o menos si modo='solo_criticos')
-- DAGs de monitoreo regional: 4
-- DAG de resumen: 1
-- **Total en modo 'completo': 21 DAGs**
-- **Total en modo 'solo_criticos': 13 DAGs** (8 críticos + 4 monitoreo + 1 resumen)
-
-## Restricciones Importantes
-
-- NO usar PythonOperator ni funciones Python complejas
-- NO usar XComs ni paso de datos entre tareas
-- Solo usar conceptos hasta 1.1.2 (declaración + carga)
-- Usar solo BashOperator (con echo) y EmptyOperator
-- Todos los mensajes en español
-- Palabras reservadas en inglés
-
-## Criterios de Éxito
-
-- [ ] Función factory correctamente implementada
-- [ ] Todos los DAGs se generan dinámicamente
-- [ ] Los DAGs aparecen en Airflow UI sin errores
-- [ ] Carga condicional funciona según MODO
-- [ ] Cada DAG tiene exactamente 7 tareas con dependencias correctas
-- [ ] Tags incluyen región, departamento y prioridad
-- [ ] DAG de resumen muestra información correcta
-- [ ] DAGs de monitoreo regional funcionan
-- [ ] Cambiar MODO afecta los DAGs cargados
-
-## Ejemplo de Salida del DAG de Resumen
-
-```
-=== Resumen del Sistema de Procesamiento Regional ===
-
-Configuración:
-  Regiones: 4 (norte, sur, centro, caribe)
-  Departamentos: 4 (ventas, marketing, operaciones, finanzas)
-  Modo: completo
-
-DAGs Generados:
-  Críticos: 8 DAGs (prioridad alta)
-  No Críticos: 8 DAGs (prioridad media)
-  Monitoreo: 4 DAGs (uno por región)
-  Total: 21 DAGs
-
-Combinaciones:
-  ✓ procesar_norte_ventas (crítico)
-  ✓ procesar_norte_marketing
-  ✓ procesar_norte_operaciones
-  ... (continúa para todas las combinaciones)
+for region in REGIONS:
+    for department in DEPARTMENTS:
+        dag_id = f'etl_{region.lower()}_{department.lower()}'
+        globals()[dag_id] = create_etl_dag(region, department)
 ```
 
-## Consejos
+Esto crea automáticamente:
+- `etl_us_sales`, `etl_us_marketing`, `etl_us_finance`, `etl_us_operations`
+- `etl_eu_sales`, `etl_eu_marketing`, `etl_eu_finance`, `etl_eu_operations`
+- `etl_apac_sales`, `etl_apac_marketing`, `etl_apac_finance`, `etl_apac_operations`
+- `etl_latam_sales`, `etl_latam_marketing`, `etl_latam_finance`, `etl_latam_operations`
 
-- Usa f-strings para construir dag_ids y mensajes
-- Recuerda que `globals()[nombre_variable] = valor` registra el DAG
-- Los bucles anidados son: `for region in REGIONES: for dept in DEPARTAMENTOS.keys():`
-- Para condicional: `if MODO == 'solo_criticos' and config['prioridad'] == 'alta':`
-- Usa `**CONFIGURACION_COMUN` para evitar repetir parámetros
+**Por qué funciona:**
+- Airflow busca objetos DAG en el namespace global (`globals()`)
+- La factory crea un DAG nuevo con cada combinación
+- `globals()[dag_id] = ...` registra el DAG en el namespace
+- Airflow los detecta automáticamente
 
-## Validación
+**Ventajas:**
+- **Mantenibilidad:** Cambias la factory, todos se actualizan
+- **Consistencia:** Todos siguen el mismo patrón
+- **Escalabilidad:** Agregar nueva región = 1 línea en la lista
+- **Testing:** Pruebas la factory 1 vez, aplica a todos
 
-Para verificar tu solución:
-1. El archivo debe cargar sin errores en Airflow
-2. Contar DAGs en UI debe dar 21 (o 13 en modo crítico)
-3. Buscar por tags debe mostrar agrupaciones correctas
-4. Trigger manual del resumen debe mostrar información precisa
-5. Cada DAG individual debe tener 7 tareas
-
-¡Buena suerte! Este desafío integra todos los conceptos de carga de DAGs.
+**Configuración técnica:**
+- 16 DAGs generados dinámicamente
+- DAG IDs: `etl_{region}_{department}` (minúsculas)
+- Schedules diferenciados: Sales hourly, Marketing every 6hrs, Finance/Ops daily
+- Tags dinámicos: `['challenge', 'loading_dags', region, department]`
+- Cada DAG tiene 6 tareas con configuraciones parametrizadas
+- Total: 16 DAGs × 6 tareas = 96 tareas gestionadas con ~50 líneas de código
 """
-
-# TODO: Implementa tu solución completa aquí
-# Incluye imports, configuraciones, función factory, generación de DAGs y DAGs auxiliares
 
 import datetime
 import os
@@ -170,5 +117,4 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-
-# Agrega tu código aquí...
+# TODO: Crea la factory function que genera múltiples DAGs

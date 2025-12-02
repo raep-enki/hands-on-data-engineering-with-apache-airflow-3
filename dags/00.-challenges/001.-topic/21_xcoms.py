@@ -1,110 +1,202 @@
 """
-Challenge: Sistema de Procesamiento Multi-Stage con XComs
+Challenge: Tareas Que Necesitan Compartir Información
 
-Objetivo:
-=========
-Crear UN ÚNICO DAG que procese datos en múltiples stages,
-usando XComs para compartir datos y metadata entre tareas.
+Tienes un pipeline donde una tarea calcula métricas (total de ventas, número de clientes, revenue)
+y otras tres tareas necesitan esos números para generar reportes diferentes. Una tarea hace cálculos
+complejos (average order value, revenue per customer) y varias tareas downstream los usan.
 
-Requisitos:
-===========
+El problema: ¿cómo pasa datos una tarea a otra? **XComs** (Cross-Communications) es la respuesta:
+una tarea "push" datos con un nombre (key), y otras tareas hacen "pull" usando ese nombre.
+Es como variables compartidas entre tareas.
 
-1. DAG: 'xcoms_challenge'
-   - Schedule: @daily
-   - Catchup: False
-   - Tags: ['challenge', 'core_concepts', 'xcoms']
+**Con TaskFlow API (@task), XCom es automático:** el return de una función se pushea, y cuando
+pasas el resultado como argumento, se pullea automáticamente.
 
-2. Pipeline (8 tareas Python con PythonOperator):
+**El flujo con XComs:**
 
-   A. extract_from_sources:
-      - Simula extracción de 3 fuentes
-      - Return dict principal: {'records': list, 'count': int}
-      - XCom push key='source_metadata': {'sources': ['api', 'db', 's3'], 'timestamp': str}
-      - XCom push key='extraction_stats': {'duration_sec': float, 'errors': int}
-   
-   B. validate_quality:
-      - Pull main data de extract_from_sources
-      - Valida que count > 0
-      - Calcula quality_score (0-100)
-      - Return: {'valid': bool, 'quality_score': int, 'data': original_data}
-      - XCom push key='validation_report': {'passed': bool, 'issues': list}
-   
-   C. enrich_data:
-      - Pull validated data
-      - Solo enriquece si quality_score >= 70
-      - Agrega campos: 'enriched': True, 'enriched_at': timestamp
-      - Return data enriquecida
-      - XCom push key='enrichment_stats': {'fields_added': int, 'time_sec': float}
-   
-   D. split_for_processing:
-      - Pull enriched data
-      - Divide records en 3 batches
-      - Return: {'batch_1': list, 'batch_2': list, 'batch_3': list}
-      - XCom push key='split_metadata': {'batch_count': 3, 'sizes': [int, int, int]}
-   
-   E. process_batch_1:
-      - Pull batches de split_for_processing
-      - Procesa solo batch_1
-      - Return: {'batch_id': 1, 'processed_count': int, 'sum': int}
-   
-   F. process_batch_2:
-      - Pull batches, procesa batch_2
-      - Return: {'batch_id': 2, 'processed_count': int, 'sum': int}
-   
-   G. process_batch_3:
-      - Pull batches, procesa batch_3
-      - Return: {'batch_id': 3, 'processed_count': int, 'sum': int}
-   
-   H. aggregate_and_report:
-      - Pull results de process_batch_1, 2, 3 (usando lista de task_ids)
-      - Pull metadata de extract (source_metadata, extraction_stats)
-      - Pull metadata de validate (validation_report)
-      - Pull metadata de enrich (enrichment_stats)
-      - Pull metadata de split (split_metadata)
-      - Genera reporte completo con:
-        * Total records processed
-        * Total sum de todos los batches
-        * Pipeline metadata (sources, quality, enrichment)
-      - Return: dict con reporte completo
-      - XCom push key='final_report': dict con todo
+**Task 1: Calcular métricas base**
+```python
+@task(task_id='calculate_base_metrics')
+def calculate_metrics():
+    # Simula cálculos de ventas
+    total_sales = 1_500_000
+    num_customers = 3_200
+    num_orders = 8_500
+    
+    print(f"Calculated: ${total_sales} from {num_customers} customers, {num_orders} orders")
+    
+    # TaskFlow automáticamente pushea este dict a XCom
+    return {
+        'total_sales': total_sales,
+        'num_customers': num_customers,
+        'num_orders': num_orders
+    }
+```
 
-3. Dependencias:
-   extract_from_sources >> validate_quality >> enrich_data >> 
-   split_for_processing >> [process_batch_1, process_batch_2, process_batch_3] >>
-   aggregate_and_report
+**Task 2: Calcular métricas derivadas (usa XCom pull)**
+```python
+@task(task_id='calculate_derived_metrics')
+def calculate_derived(base_metrics):
+    # TaskFlow automáticamente pullea base_metrics del XCom anterior
+    aov = base_metrics['total_sales'] / base_metrics['num_orders']
+    rpc = base_metrics['total_sales'] / base_metrics['num_customers']
+    orders_per_customer = base_metrics['num_orders'] / base_metrics['num_customers']
+    
+    print(f"Average Order Value: ${aov:.2f}")
+    print(f"Revenue Per Customer: ${rpc:.2f}")
+    print(f"Orders Per Customer: {orders_per_customer:.2f}")
+    
+    # Retorna otro dict que también se pushea a XCom
+    return {
+        'aov': aov,
+        'rpc': rpc,
+        'orders_per_customer': orders_per_customer
+    }
+```
 
-4. Datos de ejemplo:
-   - extract: generar 30 records [{'id': i, 'value': i*10} for i in range(1, 31)]
-   - quality_score: random entre 80-95
-   - batches: dividir 30 records en 3 batches de 10 cada uno
+**Task 3: Generar reporte ejecutivo (usa ambos XComs)**
+```python
+@task(task_id='generate_executive_report')
+def generate_exec_report(base_metrics, derived_metrics):
+    # Usa datos de 2 tareas diferentes
+    report = f"""
+    EXECUTIVE SUMMARY
+    =================
+    Total Revenue: ${base_metrics['total_sales']:,}
+    Total Customers: {base_metrics['num_customers']:,}
+    Total Orders: {base_metrics['num_orders']:,}
+    
+    Average Order Value: ${derived_metrics['aov']:.2f}
+    Revenue Per Customer: ${derived_metrics['rpc']:.2f}
+    Orders Per Customer: {derived_metrics['orders_per_customer']:.2f}
+    """
+    print(report)
+    return report
+```
 
-5. Usar PythonOperator (no @task) para práctica explícita de XCom
+**Task 4: Generar reporte de marketing (solo usa base)**
+```python
+@task(task_id='generate_marketing_report')
+def generate_marketing_report(base_metrics):
+    # Solo necesita métricas base
+    report = f"""
+    MARKETING REPORT
+    ================
+    Customer Acquisition: {base_metrics['num_customers']:,} customers
+    Total Orders: {base_metrics['num_orders']:,}
+    Conversion Rate: {(base_metrics['num_orders'] / base_metrics['num_customers']) * 100:.1f}%
+    """
+    print(report)
+    return report
+```
 
-Restricciones:
-==============
-- NO usar @task (usar PythonOperator)
-- Todas las funciones deben recibir **context
-- Usar ti = context['ti'] para XCom
-- Push múltiples keys por tarea (main return + keys adicionales)
-- Pull selectivo según necesidad
-- Prints con emojis descriptivos
+**Task 5: Generar reporte financiero (usa todos)**
+```python
+@task(task_id='generate_financial_report')
+def generate_financial_report(base_metrics, derived_metrics):
+    # Usa toda la información disponible
+    report = f"""
+    FINANCIAL REPORT
+    ================
+    Revenue: ${base_metrics['total_sales']:,}
+    Orders: {base_metrics['num_orders']:,}
+    Customers: {base_metrics['num_customers']:,}
+    
+    Key Metrics:
+    - AOV: ${derived_metrics['aov']:.2f}
+    - RPC: ${derived_metrics['rpc']:.2f}
+    - Repeat Rate: {derived_metrics['orders_per_customer']:.2f}x
+    
+    Projections:
+    - Monthly ARR: ${base_metrics['total_sales'] * 12:,}
+    - Customer LTV: ${derived_metrics['rpc'] * derived_metrics['orders_per_customer']:.2f}
+    """
+    print(report)
+    return report
+```
 
-Tips:
-=====
-- ti.xcom_push(key='name', value={...})
-- ti.xcom_pull(task_ids='task_name') → return value
-- ti.xcom_pull(task_ids='task_name', key='custom_key') → specific key
-- ti.xcom_pull(task_ids=['task1', 'task2', 'task3']) → list of values
-- Para batches: batch = data['batch_1'], batch_sum = sum(r['value'] for r in batch)
+**Task 6: XCom push/pull explícito (usando context)**
+```python
+@task(task_id='manual_xcom_example')
+def manual_xcom_push_pull(**context):
+    # Método explícito de XCom (cuando necesitas control fino)
+    ti = context['task_instance']
+    
+    # Pull de otra tarea (alternativa a parámetros)
+    base = ti.xcom_pull(task_ids='calculate_base_metrics')
+    derived = ti.xcom_pull(task_ids='calculate_derived_metrics')
+    
+    print(f"Pulled from XCom: Sales=${base['total_sales']}, AOV=${derived['aov']:.2f}")
+    
+    # Push con key custom (no solo 'return_value')
+    ti.xcom_push(key='combined_analysis', value={
+        'total_revenue': base['total_sales'],
+        'efficiency_score': derived['aov'] / 100
+    })
+    
+    # Push múltiples keys
+    ti.xcom_push(key='alert_threshold', value=1000)
+    ti.xcom_push(key='report_email', value='exec@company.com')
+    
+    return "Manual XCom operations completed"
+```
 
-Evaluación:
-===========
-- ✅ XCom push de múltiples keys por tarea
-- ✅ Pull de task individual y múltiples tasks
-- ✅ Pull de returns y keys custom
-- ✅ Metadata separada de datos principales
-- ✅ Agregación correcta de múltiples sources
-- ✅ Reporte final con toda la metadata del pipeline
+**Flujo completo con dependencias:**
+
+```python
+with DAG(
+    dag_id='xcoms_challenge',
+    schedule='@daily',
+    start_date=datetime.datetime(2024, 1, 1),
+    catchup=False,
+    tags=['challenge', 'xcoms']
+) as dag:
+    # Calcular métricas base
+    base = calculate_metrics()
+    
+    # Calcular métricas derivadas (depende de base)
+    derived = calculate_derived(base)
+    
+    # Generar reportes en paralelo (todos usan base y/o derived)
+    exec_report = generate_exec_report(base, derived)
+    marketing_report = generate_marketing_report(base)
+    financial_report = generate_financial_report(base, derived)
+    
+    # Ejemplo manual de XCom
+    manual = manual_xcom_example()
+    
+    # Dependencies: base debe terminar antes de derived y reportes
+    base >> derived
+    [derived, base] >> [exec_report, marketing_report, financial_report]
+    [exec_report, marketing_report, financial_report] >> manual
+```
+
+**Patrones demostrados:**
+
+1. **XCom automático:** `return` de @task se pushea, argumentos se pullea
+2. **Múltiples consumidores:** base_metrics es usado por 4 tareas diferentes
+3. **Cadena de XComs:** derived depende de base, financial depende de ambos
+4. **XCom explícito:** `ti.xcom_pull()` y `ti.xcom_push()` con keys custom
+5. **Procesamiento paralelo:** 3 reportes usan XComs en paralelo
+
+**XCom en la práctica:**
+- Almacenado en metadata DB de Airflow
+- Limitado a 48KB por default (usar S3/GCS para objetos grandes)
+- Cada tarea puede push/pull múltiples keys
+- TaskFlow hace XCom transparente (menos código boilerplate)
+
+**Configuración técnica:**
+- DAG ID: `xcoms_challenge`
+- Schedule: @daily
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'xcoms']`
+- 6 funciones @task demostrando XCom automático y manual
+- Flujo con dependencias múltiples: 1 → N, N → 1, parallel
 """
 
-# TU CÓDIGO AQUÍ
+import datetime
+
+from airflow.sdk import DAG, task
+
+# TODO: Implementa el pipeline con XCom push/pull entre tareas

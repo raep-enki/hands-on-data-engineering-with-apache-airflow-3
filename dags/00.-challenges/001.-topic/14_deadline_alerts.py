@@ -1,131 +1,127 @@
 """
-DESAFÍO: Sistema Multi-Tier con Deadlines Apropiados
+Challenge: Pipelines con Deadlines del Mundo Real
 
-Crea un sistema de 4 DAGs con diferentes niveles de criticidad (tiers)
-y configura deadlines apropiados para cada uno según su SLA.
+Tu empresa tiene tres tipos de pipelines con diferentes criticidades de negocio. Cada uno tiene
+un deadline estricto: si se pasa de tiempo, hay consecuencias (pérdida de dinero, incumplimiento
+de SLAs, insatisfacción de clientes). Necesitas configurar alertas automáticas cuando se rompen.
 
-CONTEXTO:
-Tienes un data platform con diferentes tipos de pipelines, cada uno
-con diferentes SLAs y niveles de criticidad:
+Airflow 3.x permite definir `deadline` en cada tarea para alertar si se pasa del límite.
 
-TIER 1 (Critical): Impacto directo en operaciones de negocio
-TIER 2 (High): Impacto en reportes ejecutivos
-TIER 3 (Medium): Impacto en análisis y optimización
-TIER 4 (Low): Impacto en datos históricos y ML
+**DAG 1: Tier 1 - Procesamiento de Pagos (CRÍTICO)**
 
-REQUISITOS:
+`deadline_challenge_tier1_payments` - Corre cada 15 minutos, deadline de 12 minutos.
 
-1. DAG TIER 1 - Payment Processing Pipeline:
-   - dag_id: 'deadline_challenge_tier1_payments'
-   - schedule: '*/15 * * * *' (cada 15 minutos)
-   - Deadline: 12 minutos desde queued
-   - Reference: DAGRUN_QUEUED_AT
-   - Callback: AsyncCallback(callback_callable=alert_callback)
-   - Tags: incluir 'tier1', 'critical', 'payments'
-   
-   Pipeline (7 tareas mínimo):
-   - start
-   - extract_transactions
-   - validate_fraud_checks
-   - verify_account_balance
-   - process_payment
-   - update_ledger
-   - notify_confirmation
-   - end
+Por qué es crítico: si los pagos tardan más de 12 min, los clientes ven errores de timeout
+en el checkout, abandonan carritos, y la empresa pierde ventas directas ($$$).
 
-2. DAG TIER 2 - Executive Dashboard Refresh:
-   - dag_id: 'deadline_challenge_tier2_dashboard'
-   - schedule: '0 6,12,18 * * *' (6 AM, 12 PM, 6 PM)
-   - Deadline: 90 minutos desde logical date
-   - Reference: DAGRUN_LOGICAL_DATE
-   - Callback: AsyncCallback(callback_callable=alert_callback)
-   - Tags: incluir 'tier2', 'high', 'dashboard'
-   
-   Pipeline (8 tareas mínimo):
-   - start
-   - extract_kpi_sources (3 fuentes en paralelo)
-   - calculate_metrics
-   - generate_charts
-   - publish_dashboard
-   - send_summary_email
-   - end
+**El flujo:**
+`start` >> `ingest_pending_payments` (BashOperator - deadline 2 min, porque debe ser rápido) >>
+`validate_payment_data` (BashOperator - deadline 1 min, validaciones simples) >>
+`process_credit_cards` (BashOperator - deadline 5 min, integra con Stripe/PayPal) >>
+`update_order_status` (BashOperator - deadline 2 min, marca pedidos como paid) >>
+`send_confirmation_emails` (BashOperator - deadline 2 min, envía recibos) >> `end`
 
-3. DAG TIER 3 - Customer Analytics Pipeline:
-   - dag_id: 'deadline_challenge_tier3_analytics'
-   - schedule: '@daily' (1 vez al día)
-   - Deadline: 4 horas desde logical date
-   - Reference: DAGRUN_LOGICAL_DATE
-   - Callback: AsyncCallback(callback_callable=alert_callback)
-   - Tags: incluir 'tier3', 'medium', 'analytics'
-   
-   Pipeline (9 tareas mínimo):
-   - start
-   - extract_customer_data
-   - extract_behavior_data
-   - merge_datasets
-   - calculate_segments
-   - calculate_ltv
-   - generate_insights
-   - update_analytics_tables
-   - trigger_ml_refresh
-   - end
+**Alertas:** Si alguna tarea pasa su deadline, envía PagerDuty alert (on_failure_callback)
+porque requiere atención INMEDIATA.
 
-4. DAG TIER 4 - Historical Data Archive:
-   - dag_id: 'deadline_challenge_tier4_archive'
-   - schedule: '0 1 * * 0' (Domingos 1 AM)
-   - Deadline: 18 horas desde logical date
-   - Reference: DAGRUN_LOGICAL_DATE
-   - Callback: AsyncCallback(callback_callable=alert_callback)
-   - Tags: incluir 'tier4', 'low', 'archive'
-   
-   Pipeline (8 tareas mínimo):
-   - start
-   - identify_old_data
-   - validate_completeness
-   - compress_data
-   - encrypt_sensitive_data
-   - upload_to_s3_glacier
-   - update_catalog
-   - cleanup_local
-   - end
+**Config:**
+- DAG ID: `deadline_challenge_tier1_payments`
+- Schedule: `*/15 * * * *` (cada 15 minutos)
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'deadline_alerts', 'tier1_critical']`
+- Total deadline del DAG: 12 min desde start
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator, EmptyOperator
-- CADA DAG debe tener su deadline configurado correctamente
-- Los deadlines deben reflejar la criticidad del tier
-- Incluir todas las tags requeridas
-- Los bash_command deben ser descriptivos
-- Mínimo el número de tareas especificado para cada DAG
+---
 
-DOCUMENTACIÓN REQUERIDA:
-Cada DAG debe tener un docstring explicando:
-- Propósito del pipeline
-- Por qué ese deadline es apropiado
-- Qué pasa si se pierde el deadline
-- Tier y criticidad
+**DAG 2: Tier 2 - Reportes de Negocio (IMPORTANTE pero no crítico)**
 
-TIPS:
-- Tier 1 (Critical): Deadlines muy cortos (minutos)
-- Tier 2 (High): Deadlines moderados (1-2 horas)
-- Tier 3 (Medium): Deadlines flexibles (2-6 horas)
-- Tier 4 (Low): Deadlines amplios (6+ horas)
-- La referencia de tiempo debe ser apropiada para cada caso
+`deadline_challenge_tier2_reporting` - Corre cada hora, deadline de 45 minutos.
+
+Por qué es importante: los stakeholders esperan reportes actualizados cada hora para tomar
+decisiones, pero pueden tolerar retrasos de unos minutos sin drama.
+
+**El flujo:**
+`start` >> `extract_sales_data` (BashOperator - deadline 10 min, query complejo en warehouse) >>
+`extract_inventory_data` (BashOperator - deadline 10 min, otra query pesada) >>
+`join_and_aggregate` (BashOperator - deadline 15 min, hace joins grandes) >>
+`calculate_kpis` (BashOperator - deadline 5 min, fórmulas de negocio) >>
+`generate_pdf_report` (BashOperator - deadline 3 min, renderiza gráficas) >>
+`send_to_stakeholders` (BashOperator - deadline 2 min, envía email con PDF adjunto) >> `end`
+
+**Alertas:** Si alguna tarea pasa su deadline, envía Slack alert (on_failure_callback)
+para que el equipo investigue, pero no es emergencia de madrugada.
+
+**Config:**
+- DAG ID: `deadline_challenge_tier2_reporting`
+- Schedule: `0 * * * *` (cada hora en punto)
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'deadline_alerts', 'tier2_important']`
+- Total deadline del DAG: 45 min desde start
+
+---
+
+**DAG 3: Tier 3 - Batch Nocturno (RELAJADO, solo debe terminar antes del día siguiente)**
+
+`deadline_challenge_tier3_batch` - Corre diario a las 01:00 AM, deadline de 20 horas.
+
+Por qué es relajado: es un proceso batch que consolida TODO el día anterior. Tiene toda
+la madrugada y mañana para completar. Solo importa que termine antes de las 9 PM del mismo día.
+
+**El flujo:**
+`start` >> `full_extract_all_sources` (BashOperator - deadline 5 hrs, extrae de 10 sistemas) >>
+`data_quality_checks` (BashOperator - deadline 2 hrs, validaciones exhaustivas) >>
+`transform_and_enrich` (BashOperator - deadline 8 hrs, transformaciones pesadas, ML features) >>
+`load_to_data_lake` (BashOperator - deadline 3 hrs, escribe TBs a S3/Parquet) >>
+`build_aggregated_tables` (BashOperator - deadline 2 hrs, crea tablas resumen para BI) >> `end`
+
+**Alertas:** Si alguna tarea pasa su deadline, solo loguea warning (on_failure_callback simple)
+porque hay tiempo de sobra para investigar en horario laboral.
+
+**Config:**
+- DAG ID: `deadline_challenge_tier3_batch`
+- Schedule: `0 1 * * *` (diario a la 01:00 AM)
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'deadline_alerts', 'tier3_batch']`
+- Total deadline del DAG: 20 horas desde start
+
+---
+
+**Callbacks sugeridos:**
+
+Puedes simular callbacks con funciones Python simples:
+```python
+def alert_pagerduty(context):
+    print(f"CRITICAL ALERT: {context['task_instance'].task_id} missed deadline!")
+
+def alert_slack(context):
+    print(f"WARNING: {context['task_instance'].task_id} missed deadline")
+
+def log_warning(context):
+    print(f"INFO: {context['task_instance'].task_id} took longer than expected")
+```
+
+Y asignarlos en las tareas:
+- Tier 1: `on_failure_callback=alert_pagerduty`
+- Tier 2: `on_failure_callback=alert_slack`
+- Tier 3: `on_failure_callback=log_warning`
+
+**Nota:** En Airflow 3.x el concepto de deadline está evolucionando. Si no está disponible,
+usa `execution_timeout` como proxy para simular deadlines por tarea.
+
+**Configuración técnica:**
+- 3 DAGs separados en el mismo archivo
+- Cada uno con schedule y deadlines diferentes
+- Usa callbacks para alertas diferenciadas por tier
+- Total: 15+ tareas entre los 3 DAGs
 """
 
 import datetime
-from datetime import timedelta
 
 from airflow.sdk import DAG
-from airflow.sdk.definitions.deadline import DeadlineAlert, DeadlineReference, AsyncCallback
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-
-async def alert_callback(**context):
-    """Función async que se ejecuta cuando se alcanza el deadline."""
-    print(f"⚠️ DEADLINE ALCANZADO para DAG: {context.get('dag_id')}")
-
-
-# TODO: Implementa los 4 DAGs según los requisitos
-# Nota: Usa DeadlineReference.DAGRUN_QUEUED_AT o DeadlineReference.DAGRUN_LOGICAL_DATE
-# Recuerda que DeadlineAlert requiere el parámetro callback=AsyncCallback(callback_callable=alert_callback)
+# TODO: Configura los 3 DAGs con deadlines y callbacks apropiados

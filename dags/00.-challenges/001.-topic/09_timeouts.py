@@ -1,123 +1,87 @@
 """
-Challenge: Sistema de Monitoreo con Timeouts y SLAs
+Challenge: Tareas Que Se Quedan Colgadas Para Siempre
 
-Objetivo:
-=========
-Crear UN ÚNICO DAG que implemente un sistema de procesamiento de datos
-con diferentes niveles de criticidad y estrategias de timeout.
+Tienes un pipeline de monitoreo que a veces se queda trabado: una tarea que consulta una API externa
+lenta se queda esperando indefinidamente (API de terceros sin SLA). Otra tarea que procesa logs pesados
+nunca termina (archivos de 10GB+). El pipeline entero se detiene y nadie sabe por qué hasta que
+revisas manualmente 3 horas después.
 
-Requisitos:
-===========
+Necesitas timeouts inteligentes y SLAs (Service Level Agreements) diferenciados por tipo de tarea.
 
-1. DAG: 'timeout_challenge'
-   - Schedule: Cada 30 minutos
-   - Catchup: False
-   - Tags: ['challenge', 'core_concepts', 'tasks', 'timeouts']
+**El flujo con timeouts estratégicos:**
 
-2. Estructura del pipeline:
-   
-   A. STAGE 1 - Data Collection (2 fuentes paralelas):
-      - collect_api_data:
-        * Timeout: 2 minutos
-        * Retries: 3
-        * Retry delay: 30 segundos
-        * SLA: 1 minuto
-      
-      - collect_database_data:
-        * Timeout: 5 minutos
-        * Retries: 2
-        * Retry delay: 1 minuto
-        * SLA: 3 minutos
-   
-   B. STAGE 2 - Data Validation:
-      - validate_data:
-        * Sin timeout explícito (usa default_args)
-        * SLA: 2 minutos
-   
-   C. STAGE 3 - Processing (3 tareas paralelas con diferentes criticidades):
-      - fast_processing (crítico):
-        * Timeout: 5 minutos
-        * Retries: 1
-        * SLA: 3 minutos
-      
-      - medium_processing (moderado):
-        * Timeout: 15 minutos
-        * Retries: 2
-        * SLA: 10 minutos
-      
-      - slow_processing (batch, no crítico):
-        * Timeout: 1 hora
-        * Retries: 1
-        * SLA: 45 minutos
-   
-   D. STAGE 4 - Quality Check (sensor):
-      - wait_for_quality_threshold:
-        * Sensor que espera que la calidad supere 90%
-        * Poke interval: 30 segundos
-        * Timeout: 5 minutos (300 segundos)
-        * Mode: poke
-   
-   E. STAGE 5 - Final Load:
-      - load_to_warehouse:
-        * Timeout: 10 minutos
-        * Retries: 2
-        * Retry delay: 2 minutos
-        * SLA: 7 minutos
+`start` (EmptyOperator) >>
 
-3. Default Args:
-   - execution_timeout: 10 minutos (para tareas sin timeout explícito)
-   - retries: 1
-   - retry_delay: 1 minuto
+`ping_external_service` (BashOperator - hace ping a API de terceros, debe responder en 10 seg o fallar.
+Timeout: `execution_timeout=timedelta(seconds=10)`. Retries: 5 porque la API es inestable.
+Retry_delay: 30 seg. Si falla después de 5 intentos, el pipeline continúa igual) >>
 
-4. SLA Callback:
-   - Implementar función sla_miss_callback que:
-     * Imprima mensaje de alerta
-     * Liste las tareas que perdieron SLA
-     * Incluya timestamp del miss
+`fetch_api_data` (BashOperator - consulta API REST para traer datos, debe completar en 2 min.
+Timeout: `execution_timeout=timedelta(minutes=2)`. Retries: 3. SLA: 5 minutos desde start del DAG.
+Por qué: negocio requiere datos frescos cada 30 min, si tarda más de 5 min el reporte llega tarde) >>
 
-5. Comandos Bash:
-   - Simular ejecución con echo y sleep
-   - Incluir emojis para visualizar etapas
-   - Los sleep deben ser < 5 segundos (es simulación)
+`validate_api_response` (BashOperator - valida JSON schema, debe ser instantáneo, timeout 30 seg.
+Timeout: `execution_timeout=timedelta(seconds=30)`. Retries: 1 (si falla es por bug, no por timeout).
+SLA: 6 minutos. Por qué: validación es crítica para detectar cambios en API upstream) >>
 
-6. Dependencias:
-   - collect_api_data, collect_database_data → validate_data
-   - validate_data → fast_processing, medium_processing, slow_processing
-   - fast_processing, medium_processing, slow_processing → wait_for_quality_threshold
-   - wait_for_quality_threshold → load_to_warehouse
+Se ramifica en 3 procesamientos paralelos con diferentes características:
 
-7. Documentación:
-   - DAG doc_md explicando:
-     * Estrategia de timeouts por nivel de criticidad
-     * Por qué algunos tienen SLA y otros no
-     * Estrategia de retries
-     * Cómo interpretar las alertas SLA
+**Procesamiento urgente (timeout corto, SLA estricto):**
+`process_realtime_alerts` (BashOperator - detecta anomalías críticas que requieren acción inmediata.
+Timeout: `execution_timeout=timedelta(minutes=3)`. Retries: 2.
+SLA: 10 minutos. Por qué: alertas críticas deben dispararse rápido o se pierde el incidente) >>
 
-Restricciones:
-==============
-- NO usar TaskFlow API (@task decorator)
-- Solo usar: BashOperator, EmptyOperator, BashSensor
-- Un solo DAG en el archivo
-- No usar XComs, Variables, ni Params
+**Procesamiento estándar (timeout medio):**
+`process_business_metrics` (BashOperator - calcula KPIs para dashboards, puede tardar un poco.
+Timeout: `execution_timeout=timedelta(minutes=10)`. Retries: 2.
+SLA: 20 minutos. Por qué: dashboards se actualizan cada hora, no es urgente pero debe completar) >>
 
-Tips:
-=====
-- Los timeouts de tareas críticas deben ser más cortos
-- SLA debe ser menor que timeout
-- Retries más altos para tareas propensas a fallos temporales
-- Sensor timeout debe considerar frecuencia de poke
-- Default args establece baseline, tareas críticas override
+**Procesamiento pesado (timeout largo, sin SLA estricto):**
+`process_historical_logs` (BashOperator - analiza 10GB de logs para tendencias, puede tardar mucho.
+Timeout: `execution_timeout=timedelta(hours=1)`. Retries: 1 porque si falla es por recursos.
+SLA: None. Por qué: es análisis batch, no time-sensitive, puede tardar lo que necesite) >>
 
-Evaluación:
-===========
-- ✅ Timeouts apropiados por criticidad
-- ✅ SLAs menores que timeouts
-- ✅ Retries balanceados
-- ✅ Sensor correctamente configurado
-- ✅ Default args aplicados correctamente
-- ✅ Callback SLA implementado
-- ✅ Documentación clara
+**Agregación y validación final (SLA crítico):**
+`[process_realtime_alerts, process_business_metrics, process_historical_logs]` >>
+`aggregate_all_results` (BashOperator - consolida resultados de los 3 procesamientos.
+Timeout: `execution_timeout=timedelta(minutes=5)`. Retries: 3.
+SLA: 25 minutos. Por qué: el reporte final debe estar listo antes del próximo ciclo de 30 min) >>
+
+`send_to_dashboard` (BashOperator - actualiza Grafana dashboard via API.
+Timeout: `execution_timeout=timedelta(minutes=2)`. Retries: 5 porque Grafana a veces está saturado.
+SLA: 28 minutos. Por qué: debe completar antes del siguiente run para no acumular retrasos) >>
+
+`cleanup` (BashOperator con `trigger_rule='all_done'` - limpia archivos temporales SIEMPRE.
+Timeout: `execution_timeout=timedelta(minutes=1)`. Retries: 0 porque limpieza no es crítica) >>
+
+`end` (EmptyOperator)
+
+**Configuración de timeouts por tipo de tarea:**
+- APIs externas: timeout corto (10 seg - 2 min), retries altos (3-5), porque son rápidas pero inestables
+- Validaciones: timeout muy corto (30 seg), retries mínimos (1), porque deben ser instantáneas
+- Procesamiento ligero: timeout medio (3-10 min), retries normales (2)
+- Procesamiento pesado: timeout largo (1 hora), retries bajos (1), porque fallas son por recursos
+
+**Configuración de SLAs por criticidad:**
+- Crítico: SLA 6-10 min (validación, alertas) - negocio requiere respuesta rápida
+- Estándar: SLA 20-25 min (métricas, agregación) - debe completar antes del próximo ciclo
+- Batch: SLA None (logs históricos) - no time-sensitive
+
+**Configuración técnica:**
+- DAG ID: `timeout_challenge`
+- Schedule: `*/30 * * * *` (cada 30 minutos)
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'timeouts']`
+- Usa `from datetime import timedelta` para los timeouts
+- Total: 10 tareas con timeouts y SLAs diferenciados
 """
 
-# TU CÓDIGO AQUÍ
-# Implementa el DAG siguiendo las especificaciones anteriores
+import datetime
+from datetime import timedelta
+
+from airflow.sdk import DAG
+from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
+
+# TODO: Define el pipeline con timeouts y SLAs estratégicos

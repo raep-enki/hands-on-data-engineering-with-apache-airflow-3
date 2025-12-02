@@ -1,178 +1,96 @@
 """
-# DESAFÍO: Sistema de Procesamiento Paralelo con Manejo de Fallos
+Challenge: Un Pipeline de ML Que Nunca Se Rinde
 
-## Objetivo
-Crear un DAG que procese datos de múltiples fuentes en paralelo y use trigger rules
-para manejar diferentes escenarios: éxito parcial, fallos y recuperación.
+Estás entrenando modelos de machine learning y el problema es que algunas fuentes de datos fallan.
+Pero no puedes esperar a que TODAS las fuentes estén listas. Si al menos una fuente tiene datos,
+quieres continuar. Entrenas tres versiones del modelo en paralelo (porque no sabes cuál será mejor).
+Si al menos UNO de los modelos funciona, quieres desplegarlo. Al final, SIEMPRE limpias recursos.
 
-## Contexto del Negocio
-Eres el Data Engineer de una empresa que procesa datos de 4 fuentes diferentes:
-- Base de datos interna
-- API externa 1
-- API externa 2
-- Archivos en S3
+Debes usar al menos 8 trigger_rules diferentes para manejar todos los escenarios de fallo y éxito.
+Es un ejercicio avanzado de resiliencia donde demuestras que conoces todas las opciones disponibles.
 
-El sistema debe ser resiliente: si algunas fuentes fallan, el procesamiento debe
-continuar con los datos disponibles, pero también debe alertar y intentar recuperación.
+**El flujo del pipeline resiliente:**
 
-## Requisitos
+`start` (EmptyOperator) se ramifica a 4 fuentes de datos en paralelo:
+- `fetch_source_a` (BashOperator - puede fallar 30% del tiempo)
+- `fetch_source_b` (BashOperator - puede fallar 40% del tiempo)
+- `fetch_source_c` (BashOperator - puede fallar 20% del tiempo)
+- `fetch_source_d` (BashOperator - puede fallar 50% del tiempo, la más inestable)
 
-### Configuración del DAG
-- **DAG ID**: `resilient_data_pipeline`
-- **Schedule**: `0 2 * * *` (2 AM diario)
-- **Start Date**: 2024-01-01
-- **Catchup**: False
-- **Tags**: `['challenge', 'core_concepts', 'dags', 'control_flow', 'trigger_rules']`
-- **Description**: "Pipeline resiliente con trigger rules para manejo de fallos"
+**Primera convergencia** (con trigger_rule='one_success'):
+`[todas las 4 fuentes]` >> `aggregate_available_data` (BashOperator - con `trigger_rule='one_success'`
+porque basta que UNA fuente funcione para continuar. Consolida lo que esté disponible).
 
-### Estructura del DAG
+**Validación obligatoria** (con trigger_rule='all_success' - DEFAULT):
+`aggregate_available_data` >> `validate_data_quality` (BashOperator - valida formato y completitud,
+debe tener éxito obligatoriamente o el pipeline falla).
 
-**Fase 1: Extracción (4 tareas en paralelo)**
-1. `inicio` (EmptyOperator)
-2. `extraer_database` (BashOperator) - "Extrayendo de base de datos interna"
-3. `extraer_api_1` (BashOperator) - "Extrayendo de API externa 1"
-4. `extraer_api_2` (BashOperator) - "Extrayendo de API externa 2"
-5. `extraer_s3` (BashOperator) - "Extrayendo archivos de S3"
+**Feature engineering** (con trigger_rule='none_failed'):
+`validate_data_quality` >> `calculate_features` (BashOperator - con `trigger_rule='none_failed'`
+porque si la validación fue skipped pero nada falló, igual continúa).
 
-**Fase 2: Alertas y Validación**
-6. `alerta_primer_fallo` (BashOperator) - "🚨 Alerta: al menos una fuente falló"
-   - **trigger_rule**: `ONE_FAILED`
-   
-7. `alerta_fallo_critico` (BashOperator) - "🔴 CRÍTICO: Todas las fuentes fallaron"
-   - **trigger_rule**: `ALL_FAILED`
+`calculate_features` se ramifica en 3 entrenamientos paralelos:
+- `train_model_xgboost` (BashOperator - modelo XGBoost, puede fallar si no hay suficientes datos)
+- `train_model_random_forest` (BashOperator - modelo Random Forest, más robusto)
+- `train_model_neural_net` (BashOperator - modelo Neural Net, puede fallar por memoria)
 
-8. `validar_datos_disponibles` (BashOperator) - "Validando datos extraídos exitosamente"
-   - **trigger_rule**: `ONE_SUCCESS`
+**Evaluación de modelos** (cada modelo tiene su evaluación):
+- `train_model_xgboost` >> `evaluate_xgboost` (BashOperator - calcula accuracy)
+- `train_model_random_forest` >> `evaluate_random_forest` (BashOperator - calcula accuracy)
+- `train_model_neural_net` >> `evaluate_neural_net` (BashOperator - calcula accuracy)
 
-**Fase 3: Procesamiento Condicional**
-9. `procesar_datos_completos` (BashOperator) - "Procesando dataset completo (todas las fuentes)"
-   - **trigger_rule**: `ALL_SUCCESS`
-   
-10. `procesar_datos_parciales` (BashOperator) - "Procesando con datos parciales"
-    - **trigger_rule**: `NONE_FAILED_MIN_ONE_SUCCESS`
+**Selección del mejor modelo** (con trigger_rule='one_success'):
+`[evaluate_xgboost, evaluate_random_forest, evaluate_neural_net]` >> `select_best_model`
+(BashOperator - con `trigger_rule='one_success'` porque basta que UN modelo haya funcionado.
+Selecciona el mejor disponible entre los que completaron).
 
-**Fase 4: Transformaciones (después de procesamiento)**
-11. `transformar_datos` (BashOperator) - "Aplicando transformaciones"
-    - **trigger_rule**: `NONE_FAILED`
-    
-12. `calcular_metricas` (BashOperator) - "Calculando métricas de calidad"
-    - **trigger_rule**: `NONE_FAILED`
+**Deployment condicional** (con trigger_rule='none_failed_min_one_success'):
+`select_best_model` >> `deploy_to_staging` (BashOperator - con `trigger_rule='none_failed_min_one_success'`
+porque solo deploya si algo upstream tuvo éxito Y nada falló crítico).
 
-**Fase 5: Carga y Finalización**
-13. `cargar_warehouse` (BashOperator) - "Cargando datos al warehouse"
-    - **trigger_rule**: `NONE_FAILED`
+`deploy_to_staging` se ramifica en dos validaciones paralelas:
+- `test_model_performance` (BashOperator - prueba latencia y throughput)
+- `test_model_accuracy` (BashOperator - prueba contra test set)
 
-14. `generar_reporte` (BashOperator) - "Generando reporte de ejecución"
-    - **trigger_rule**: `ALL_DONE`
-    
-15. `limpiar_staging` (BashOperator) - "Limpiando área de staging"
-    - **trigger_rule**: `ALL_DONE`
-    
-16. `fin` (EmptyOperator)
-    - **trigger_rule**: `ALL_DONE`
+**Deployment a producción** (con trigger_rule='all_success'):
+`[test_model_performance, test_model_accuracy]` >> `deploy_to_production` (BashOperator -
+con `trigger_rule='all_success'` DEFAULT porque AMBOS tests deben pasar para ir a prod).
 
-### Dependencias
+**Path alternativo si falla deployment:**
+`deploy_to_production` >> `notify_success` (BashOperator - envía Slack si deployment exitoso)
+`deploy_to_staging` >> `rollback_to_previous` (BashOperator - con `trigger_rule='one_failed'`
+se ejecuta SOLO si algún test falló, hace rollback al modelo anterior).
 
-```
-inicio
-    ↓
-[extraer_database, extraer_api_1, extraer_api_2, extraer_s3] (paralelo)
-    ↓
-    ├── alerta_primer_fallo (trigger: ONE_FAILED)
-    ├── alerta_fallo_critico (trigger: ALL_FAILED)
-    ├── validar_datos_disponibles (trigger: ONE_SUCCESS)
-    ├── procesar_datos_completos (trigger: ALL_SUCCESS)
-    └── procesar_datos_parciales (trigger: NONE_FAILED_MIN_ONE_SUCCESS)
-    ↓
-[transformar_datos, calcular_metricas] (paralelo, trigger: NONE_FAILED)
-    ↓
-cargar_warehouse (trigger: NONE_FAILED)
-    ↓
-[generar_reporte, limpiar_staging] (paralelo, trigger: ALL_DONE)
-    ↓
-fin (trigger: ALL_DONE)
-```
+**Limpieza garantizada** (con trigger_rule='all_done'):
+`[notify_success, rollback_to_previous]` >> `cleanup_temp_files` (BashOperator -
+con `trigger_rule='all_done'` se ejecuta SIEMPRE sin importar qué pasó antes) >>
 
-## Restricciones
+`cleanup_temp_files` >> `release_resources` (BashOperator - con `trigger_rule='all_done'`
+libera GPU y memoria SIEMPRE) >> `end` (EmptyOperator con `trigger_rule='all_done'`).
 
-1. **Solo usar BashOperator y EmptyOperator**
-2. **NO usar PythonOperator ni @task decorators**
-3. **Todos los BashOperator deben usar echo con mensajes descriptivos**
-4. **Cada tarea debe tener el trigger_rule especificado**
-5. **Las tareas de limpieza SIEMPRE deben ejecutarse**
-6. **Un único DAG en el archivo `challenge.py`**
+**Trigger rules usados (8 diferentes):**
+1. `all_success` (default) - validate_data_quality, deploy_to_production
+2. `one_success` - aggregate_available_data, select_best_model
+3. `none_failed` - calculate_features
+4. `none_failed_min_one_success` - deploy_to_staging
+5. `one_failed` - rollback_to_previous
+6. `all_done` - cleanup_temp_files, release_resources, end
+7. (implícito `all_success` en evaluaciones individuales)
+8. (implícito `all_success` en tests paralelos)
 
-## Imports Necesarios
-
-```python
-import datetime
-
-from airflow.sdk import DAG, TriggerRule
-from airflow.providers.standard.operators.bash import BashOperator
-from airflow.providers.standard.operators.empty import EmptyOperator
-```
-
-## Trigger Rules a Usar
-
-- `TriggerRule.ONE_FAILED` - Para alertas tempranas
-- `TriggerRule.ALL_FAILED` - Para alertas críticas
-- `TriggerRule.ONE_SUCCESS` - Para validación con al menos un éxito
-- `TriggerRule.ALL_SUCCESS` - Para procesamiento completo
-- `TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS` - Para procesamiento parcial
-- `TriggerRule.NONE_FAILED` - Para transformaciones
-- `TriggerRule.ALL_DONE` - Para tareas de finalización
-
-## Criterios de Éxito
-
-- [ ] DAG creado con el dag_id `resilient_data_pipeline`
-- [ ] 16 tareas implementadas según especificación
-- [ ] Todas las trigger_rules configuradas correctamente
-- [ ] 4 tareas de extracción en paralelo
-- [ ] 5 tareas de alertas/validación con diferentes trigger rules
-- [ ] 2 tareas de procesamiento (completo vs parcial)
-- [ ] 2 tareas de transformación
-- [ ] 3 tareas de finalización que siempre se ejecutan
-- [ ] Dependencias implementadas según el diagrama
-- [ ] Usa context manager style (`with DAG(...)`)
-
-## Validación
-
-Para verificar tu solución:
-1. El DAG carga sin errores en la UI de Airflow
-2. Inspecciona el Graph View para verificar todas las conexiones
-3. Simula diferentes escenarios cambiando comandos bash:
-   - **Todas exitosas**: Dejar todos con echo
-   - **Una falla**: Cambiar una extracción a `exit 1`
-   - **Todas fallan**: Cambiar todas las extracciones a `exit 1`
-4. Verifica que las tareas se ejecuten según su trigger_rule
-5. Las tareas de limpieza SIEMPRE deben ejecutarse
-
-## Escenarios de Prueba
-
-### Escenario 1: Todas las fuentes exitosas
-- Deben ejecutarse: todas las extracciones, validar, procesar_completo, transformar, cargar, reporte, limpiar
-- NO deben ejecutarse: alerta_primer_fallo, alerta_fallo_critico, procesar_parcial
-
-### Escenario 2: Una fuente falla
-- Deben ejecutarse: 3 extracciones exitosas, alerta_primer_fallo, validar, procesar_parcial, transformar, cargar
-- NO deben ejecutarse: procesar_completo
-- SIEMPRE ejecutan: reporte, limpiar, fin
-
-### Escenario 3: Todas las fuentes fallan
-- Deben ejecutarse: alerta_primer_fallo, alerta_fallo_critico
-- NO deben ejecutarse: validar, procesar_completo, procesar_parcial, transformar, cargar
-- SIEMPRE ejecutan: reporte, limpiar, fin
-
-¡Buena suerte! Este desafío simula un sistema real de data engineering resiliente.
+**Configuración técnica:**
+- DAG ID: `trigger_rules_challenge`
+- Schedule: @daily
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'trigger_rules']`
+- Al menos 20 tareas demostrando diferentes escenarios de fallo/éxito
 """
 
-# TODO: Implementa el DAG según las especificaciones anteriores
-
 import datetime
 
-from airflow.sdk import DAG, TriggerRule
+from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-
-# Implementa tu solución aquí...
+# TODO: Diseña el pipeline resiliente con múltiples trigger rules

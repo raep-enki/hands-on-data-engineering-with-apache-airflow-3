@@ -1,70 +1,152 @@
 """
-DESAFÍO: Sistema de Procesamiento Multi-Región con Generación Dinámica
+Challenge: Un DAG por Cada Tabla de la Base de Datos
 
-Crea un sistema que procese datos de múltiples regiones y múltiples tipos
-de datos de forma dinámica, con validaciones y consolidación.
+Tu data warehouse tiene 50 tablas. Cada una necesita un pipeline de quality checks. Podrías
+crear 50 archivos de DAG manualmente, pero cada vez que agregan una tabla nueva, tienes que
+crear otro DAG manualmente. Es tedioso, propenso a errores, y no escala.
 
-REQUISITOS:
+La solución: defines la configuración de tablas en un diccionario (o podría ser YAML, base de datos,
+API, lo que sea), y generas los 50 DAGs automáticamente con un loop. Agregas una tabla a la config,
+y automáticamente aparece su DAG en Airflow. Quitas una, y desaparece.
 
-1. DAG Configuration:
-   - dag_id: 'multi_region_data_processing'
-   - schedule: '@daily'
-   - Usar tags apropiados
+Las tablas tienen diferentes requirements según su tipo:
+- **Dimensionales** (dim_*): 3 checks diarios a las 00:00
+- **Hechos** (fact_*): 5 checks cada hora (datos críticos)
+- **Staging** (stg_*): 2 checks cada 30 minutos (ingesta continua)
 
-2. Configuración de Datos:
-   Definir una estructura de configuración con:
-   - 4 regiones: ['us-east', 'us-west', 'eu-central', 'asia-pacific']
-   - 3 tipos de datos por región: ['sales', 'inventory', 'customers']
-   - Cada combinación región-tipo debe tener su propio pipeline
+**Configuración de tablas:**
 
-3. Pipeline por Región-Tipo (12 pipelines en total):
-   Para cada combinación de región y tipo de dato:
-   - Tarea de extracción: extract_{region}_{type}
-   - Tarea de validación: validate_{region}_{type}
-   - Tarea de transformación: transform_{region}_{type}
+```python
+TABLE_CONFIG = {
+    # Tablas dimensionales (cambian poco, checks diarios)
+    'dim_customers': {
+        'type': 'dimension',
+        'schedule': '@daily',
+        'checks': ['row_count', 'nulls', 'duplicates']
+    },
+    'dim_products': {
+        'type': 'dimension',
+        'schedule': '@daily',
+        'checks': ['row_count', 'nulls', 'duplicates']
+    },
+    'dim_locations': {
+        'type': 'dimension',
+        'schedule': '@daily',
+        'checks': ['row_count', 'nulls', 'duplicates']
+    },
+    
+    # Tablas de hechos (cambian mucho, checks frecuentes)
+    'fact_sales': {
+        'type': 'fact',
+        'schedule': '@hourly',
+        'checks': ['row_count', 'nulls', 'duplicates', 'referential_integrity', 'data_freshness']
+    },
+    'fact_orders': {
+        'type': 'fact',
+        'schedule': '@hourly',
+        'checks': ['row_count', 'nulls', 'duplicates', 'referential_integrity', 'data_freshness']
+    },
+    
+    # Tablas staging (ingesta continua, checks rápidos)
+    'stg_api_events': {
+        'type': 'staging',
+        'schedule': '*/30 * * * *',  # cada 30 min
+        'checks': ['row_count', 'data_freshness']
+    },
+    'stg_kafka_stream': {
+        'type': 'staging',
+        'schedule': '*/30 * * * *',
+        'checks': ['row_count', 'data_freshness']
+    },
+    
+    # ... 43 tablas más ...
+}
+```
 
-4. Consolidación por Región (4 tareas):
-   - Después de procesar los 3 tipos de datos de una región
-   - Consolidar los datos de esa región: consolidate_{region}
-   - Cada consolidación depende de las 3 transformaciones de su región
+**Factory function que genera DAGs:**
 
-5. Consolidación por Tipo (3 tareas):
-   - Consolidar el mismo tipo de dato de todas las regiones
-   - consolidate_all_{type}
-   - Cada una depende de las transformaciones de ese tipo de todas las regiones
+```python
+def create_quality_check_dag(table_name, table_config):
+    dag_id = f"data_quality_{table_config['type']}_{table_name}"
+    
+    dag = DAG(
+        dag_id=dag_id,
+        schedule=table_config['schedule'],
+        start_date=datetime.datetime(2024, 1, 1),
+        catchup=False,
+        tags=['challenge', 'dynamic_dags', table_config['type'], table_name]
+    )
+    
+    with dag:
+        start = EmptyOperator(task_id='start')
+        
+        # Generar tareas dinámicamente según checks
+        check_tasks = []
+        for check in table_config['checks']:
+            task = BashOperator(
+                task_id=f'check_{check}',
+                bash_command=f'echo "Running {check} on {table_name}"'
+            )
+            check_tasks.append(task)
+        
+        end = EmptyOperator(task_id='end')
+        
+        # Dependencies
+        start >> check_tasks >> end
+    
+    return dag
+```
 
-6. Validación Global:
-   - Tarea que valida la consistencia entre regiones
-   - Depende de todas las consolidaciones por región
+**Generación de todos los DAGs:**
 
-7. Merge Final:
-   - Tarea que combina todos los datos procesados
-   - Depende de todas las consolidaciones por tipo
+```python
+# Loop sobre la configuración y genera DAGs
+for table_name, table_config in TABLE_CONFIG.items():
+    dag_id = f"data_quality_{table_config['type']}_{table_name}"
+    globals()[dag_id] = create_quality_check_dag(table_name, table_config)
+```
 
-8. Reporte Final:
-   - Generar reporte con estadísticas de todas las regiones y tipos
-   - Depende de validación global y merge final
+Esto crea automáticamente DAGs como:
+- `data_quality_dimension_dim_customers` (diario, 3 checks)
+- `data_quality_dimension_dim_products` (diario, 3 checks)
+- `data_quality_fact_fact_sales` (hourly, 5 checks)
+- `data_quality_fact_fact_orders` (hourly, 5 checks)
+- `data_quality_staging_stg_api_events` (cada 30min, 2 checks)
+- ... 45 más ...
 
-ESTRUCTURA ESPERADA:
-- 12 pipelines paralelos (4 regiones × 3 tipos)
-- 4 consolidaciones por región
-- 3 consolidaciones por tipo
-- 1 validación global
-- 1 merge final
-- 1 reporte final
-Total: Mínimo 22 tareas
+**El flujo de cada DAG generado:**
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator y EmptyOperator
-- DEBES usar bucles para generar las tareas dinámicamente
-- NO escribir 12 pipelines manualmente
-- Las extracciones de cada región deben poder ejecutarse en paralelo
-- Demostrar el uso de listas para agrupar tareas relacionadas
+`start` >>
 
-TIPS:
-- Usa diccionarios anidados o listas para almacenar referencias a tareas
-- Considera usar task_id con formato: f'{region}_{data_type}_{stage}'
-- Usa dag.get_task() si necesitas referenciar tareas creadas previamente
+Tareas generadas dinámicamente según `table_config['checks']`:
+- `check_row_count` (BashOperator - verifica count > 0 y creciendo)
+- `check_nulls` (BashOperator - verifica columnas críticas sin nulls)
+- `check_duplicates` (BashOperator - verifica primary keys únicos)
+- `check_referential_integrity` (BashOperator - verifica foreign keys válidos) [solo fact tables]
+- `check_data_freshness` (BashOperator - verifica datos recientes) [solo fact/staging]
+
+>> `end`
+
+**Ventajas del approach:**
+- **Escalabilidad:** 1 tabla nueva = 1 entrada en dict, DAG aparece automático
+- **Consistencia:** Todos los DAGs siguen el mismo patrón
+- **Mantenibilidad:** Cambias la factory, 50 DAGs se actualizan
+- **Configuration as Code:** La config es versionada junto al código
+- **Flexibilidad:** Diferentes tipos de tablas tienen diferentes checks
+
+**Evolución posible:**
+En vez de dict hardcoded, podrías:
+- Leer de YAML: `TABLE_CONFIG = yaml.load('tables.yaml')`
+- Leer de DB: `TABLE_CONFIG = fetch_from_metadata_db()`
+- Leer de API: `TABLE_CONFIG = requests.get('/api/tables').json()`
+
+**Configuración técnica:**
+- Genera al menos 10 DAGs (3 dimension, 4 fact, 3 staging)
+- DAG IDs: `data_quality_{tipo}_{tabla}`
+- Schedules diferenciados: daily para dim, hourly para fact, cada 30min para staging
+- Tags dinámicos: `['challenge', 'dynamic_dags', tipo, tabla]`
+- Cada DAG tiene 2-5 tareas según tipo
+- Total: 10 DAGs generados con ~30 líneas de código
 """
 
 import datetime
@@ -73,6 +155,4 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Define la configuración de regiones y tipos de datos
-
-# TODO: Implementa el DAG según los requisitos
+# TODO: Define la config y genera los DAGs en un loop

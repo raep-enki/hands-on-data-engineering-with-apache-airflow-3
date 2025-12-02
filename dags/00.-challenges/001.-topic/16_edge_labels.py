@@ -1,91 +1,109 @@
 """
-DESAFÍO: Pipeline de Reporte Financiero con Edge Labels
+Challenge: El Pipeline Con Decisiones Que Nadie Entiende
 
-Crea un DAG que procese datos financieros con múltiples caminos
-y usa edge labels para documentar completamente el flujo, las decisiones
-y las transformaciones en cada paso.
+Miras el grafo de un pipeline complejo y ves: una tarea se conecta a tres tareas diferentes. ¿Por qué?
+¿Qué significa cada camino? Otra tarea tiene dos salidas: ¿cuándo va por una y cuándo por otra?
+El grafo no te dice nada, solo muestra flechas sin contexto.
 
-REQUISITOS:
+Tu misión: agregar **edge labels** (etiquetas en las conexiones) explicando qué significan.
+"Esta flecha es cuando la calidad es > 95%". "Esta otra es cuando la validación falla y necesita
+reprocesar". Son como comentarios inline, pero en el grafo visual.
 
-1. DAG Configuration:
-   - dag_id: 'financial_reporting_pipeline'
-   - schedule: '@daily'
-   - Usar tags apropiados
+Airflow permite usar `Label()` para documentar decisiones en las flechas del grafo.
 
-2. Inicio y Preparación:
-   - start: Tarea inicial
-   - check_business_day: Verificar si es día hábil
-   - Label desde start: 'Iniciar proceso'
-   - Label desde check: 'Verificación completada'
+**El flujo con decisiones documentadas:**
 
-3. Branching por Tipo de Día:
-   - Usar BranchPythonOperator: decide_report_type
-   - Si es fin de semana (días 5,6): 'weekend_summary'
-   - Si es fin de mes (día 28-31): 'monthly_close'
-   - Si es día normal: 'daily_reports'
-   - Labels específicos para cada camino explicando la condición
+`start` (EmptyOperator) >> `ingest_customer_data` (BashOperator - carga datos raw) >>
 
-4. Rama Weekend (fin de semana):
-   - generate_weekly_summary
-   - validate_week_totals
-   - Labels: 'Datos semanales', 'Totales validados'
+`validate_data_schema` (BashOperator - verifica schema correcto) >>
 
-5. Rama Monthly (fin de mes):
-   - aggregate_monthly_data
-   - calculate_kpis
-   - reconcile_accounts
-   - generate_month_end_reports
-   - Flujo secuencial con labels descriptivos
+**Primera decisión con branches documentados:**
 
-6. Rama Daily (día normal):
-   - extract_transactions (paralelo con extract_balances)
-   - extract_balances (paralelo con extract_transactions)
-   - consolidate_daily_data
-   - Labels: 'Transacciones', 'Balances', 'Consolidado'
+`branch_by_data_quality` (BranchPythonOperator - evalúa quality score):
+- Si score >= 95 >> Label("Quality Excellent (>=95)") >> `process_premium_path` 
+  (BashOperator - procesamiento completo con analytics avanzados)
+- Si 80 <= score < 95 >> Label("Quality Good (80-95)") >> `process_standard_path`
+  (BashOperator - procesamiento estándar sin features extra)
+- Si score < 80 >> Label("Quality Poor (<80)") >> `flag_for_manual_review`
+  (BashOperator - envía a cola de revisión humana)
 
-7. Punto de Convergencia:
-   - validate_all_reports (trigger_rule=ALL_DONE)
-   - Labels desde cada rama explicando qué tipo de datos llegan
+Los 3 paths convergen en `run_base_transformations` (BashOperator con `trigger_rule='none_failed_min_one_success'`
+aplica transformaciones comunes a todos los paths) >>
 
-8. Procesamiento Final:
-   - archive_reports
-   - notify_stakeholders
-   - update_dashboard
-   - Las 3 tareas en paralelo
-   - Labels: 'Archivados', 'Notificados', 'Dashboard actualizado'
+**Segunda decisión con branches documentados:**
 
-9. Manejo de Errores:
-   - log_errors (trigger_rule=ONE_FAILED)
-   - send_alert
-   - Labels: 'Error detectado', 'Alerta enviada'
+`branch_by_record_count` (BranchPythonOperator - evalúa volumen de datos):
+- Si count >= 100k >> Label("High Volume (100k+ records)") >> `use_spark_processing`
+  (BashOperator - usa Spark para procesar millones de registros eficientemente)
+- Si 10k <= count < 100k >> Label("Medium Volume (10k-100k)") >> `use_pandas_processing`
+  (BashOperator - usa Pandas, suficiente para decenas de miles)
+- Si count < 10k >> Label("Low Volume (<10k)") >> `use_simple_python`
+  (BashOperator - usa Python vanilla, no necesita librerías pesadas)
 
-10. Finalización:
-    - cleanup (trigger_rule=ALL_DONE)
-    - end
-    - Labels: 'Limpieza completada', 'Proceso finalizado'
+Los 3 paths convergen en `validate_processing_results` (BashOperator con `trigger_rule='none_failed_min_one_success'`
+verifica que el output es correcto independiente del path) >>
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator, EmptyOperator, BranchPythonOperator
-- CADA conexión entre tareas DEBE tener un Label descriptivo
-- Mínimo 18 tareas en total
-- Mínimo 20 Labels en total
-- Los labels deben ser informativos, no genéricos ('ok', 'done', etc.)
-- Demostrar branching, paralelo, trigger rules y convergencia
+**Tercera decisión con branches documentados:**
 
-TIPS:
-- Los labels pueden incluir emojis para mejor visualización
-- Labels pueden indicar: tipo de datos, volumen, formato, condiciones
-- Usa labels para documentar qué pasa en caso de éxito vs error
-- La función de branching debe usar context['logical_date']
+`check_business_metrics` (BashOperator - calcula métricas de negocio) >>
+
+`branch_by_metrics_health` (BranchPythonOperator - evalúa si métricas están OK):
+- Si métricas OK >> Label("Metrics Healthy") >> `load_to_production`
+  (BashOperator - carga directo a producción)
+- Si métricas degradadas >> Label("Metrics Degraded - Investigation Required") >> `create_incident_ticket`
+  (BashOperator - abre ticket en Jira para investigación)
+
+Ambos convergen en `update_monitoring_dashboard` (BashOperator con `trigger_rule='none_failed_min_one_success'`
+actualiza Grafana con resultados) >>
+
+**Paths finales paralelos con labels:**
+
+De `update_monitoring_dashboard` se ramifican 3 tareas finales:
+- Label("Send to Data Lake") >> `archive_to_s3` (BashOperator - backup en S3)
+- Label("Update Cache") >> `refresh_redis_cache` (BashOperator - invalida cache viejo)
+- Label("Notify Stakeholders") >> `send_email_report` (BashOperator - envía resumen)
+
+Todas convergen en `end` (EmptyOperator)
+
+**Cómo usar Label():**
+
+```python
+from airflow.utils.edgemodifier import Label
+
+# Opción 1: Inline con >>
+branch_task >> Label("When quality >= 95") >> high_quality_task
+
+# Opción 2: Con listas
+[task1, task2] >> Label("Both completed successfully") >> next_task
+
+# Opción 3: Múltiples labels
+branch >> Label("Path A: Premium") >> taskA
+branch >> Label("Path B: Standard") >> taskB
+branch >> Label("Path C: Review") >> taskC
+```
+
+**Beneficios de edge labels:**
+- **Documentación visual:** El grafo explica por sí solo las decisiones
+- **Onboarding:** Nuevos miembros entienden la lógica sin leer código
+- **Debugging:** Rápido ver qué path tomó un run y por qué
+- **Comunicación:** Puedes compartir el grafo con stakeholders no técnicos
+
+**Configuración técnica:**
+- DAG ID: `conditional_data_pipeline`
+- Schedule: @daily
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'edge_labels', 'documentation']`
+- Usa `Label()` en al menos 10 conexiones diferentes
+- 3 BranchPythonOperators con múltiples paths documentados
+- Total: 15+ tareas con decisiones explicadas visualmente
 """
 
 import datetime
 
-from airflow.sdk import DAG, Label, TriggerRule
-from airflow.providers.standard.operators.python import BranchPythonOperator
+from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.utils.edgemodifier import Label
 
-# TODO: Define la función de branching
-
-# TODO: Implementa el DAG según los requisitos
+# TODO: Documenta el flujo con edge labels descriptivos

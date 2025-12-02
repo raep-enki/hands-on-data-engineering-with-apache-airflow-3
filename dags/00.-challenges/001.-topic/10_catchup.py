@@ -1,116 +1,86 @@
 """
-DESAFÍO: Data Warehouse ETL con Catchup Strategy
+Challenge: Dos Estrategias de Carga Completamente Diferentes
 
-Crea un pipeline ETL que procesa datos históricos de forma inteligente,
-usando la estrategia de catchup apropiada según el tipo de carga.
+Tu empresa tiene dos sistemas con filosofías opuestas de carga de datos. Debes crear ambos
+DAGs para demostrar que entiendes las diferencias entre full refresh e incremental, y cuándo
+usar `catchup=False` vs `catchup=True`.
 
-CONTEXTO:
-Tienes un data warehouse que necesita 3 tipos de pipelines diferentes:
-- Full refresh: Carga completa que reemplaza toda la tabla
-- Incremental: Carga solo datos nuevos desde última ejecución
-- SCD Type 2: Slowly Changing Dimensions con histórico
+**DAG 1: Full Refresh (catchup=False)**
 
-REQUISITOS:
+`catchup_challenge_full_refresh` - Ejecuta cada lunes a las 00:00, start_date hace 30 días.
 
-1. DAG: Full Refresh Pipeline
-   - dag_id: 'catchup_challenge_full_refresh'
-   - schedule: '@weekly' (domingos a medianoche)
-   - start_date: 30 días atrás
-   - catchup: ¿True o False? (decide y justifica en doc_md)
-   - Tags: incluir 'challenge', 'dag_runs', 'catchup', 'full_refresh'
-   
-   Pipeline (6 tareas mínimo):
-   - start
-   - truncate_target_table (limpia tabla destino)
-   - extract_all_records (extrae TODOS los registros)
-   - transform_full_dataset
-   - load_complete_table
-   - rebuild_indexes
-   - end
-   
-   Doc_md debe explicar:
-   - ¿Por qué elegiste catchup=True o False?
-   - ¿Tiene sentido ejecutar full refresh históricos?
-   - ¿Qué pasa si activas este DAG después de 1 año?
+El propósito: refresca toda la tabla de productos del e-commerce desde cero cada semana.
+No importa qué pasó en semanas anteriores, solo importa el estado actual.
 
-2. DAG: Incremental Pipeline
-   - dag_id: 'catchup_challenge_incremental'
-   - schedule: '@daily'
-   - start_date: 7 días atrás
-   - catchup: ¿True o False? (decide y justifica)
-   - Tags: incluir 'challenge', 'dag_runs', 'catchup', 'incremental'
-   
-   Pipeline (7 tareas mínimo):
-   - start
-   - get_last_processed_date (determina desde cuándo cargar)
-   - extract_new_records (WHERE date > last_date)
-   - validate_no_duplicates
-   - transform_incremental
-   - load_append (agrega registros, no reemplaza)
-   - update_watermark (guarda fecha procesada)
-   - end
-   
-   Doc_md debe explicar:
-   - ¿Por qué elegiste catchup=True o False?
-   - ¿Cómo manejas datos faltantes si omitiste un día?
-   - ¿Estrategia de recovery si falla un día?
+**Por qué catchup=False:**
+Si activas este DAG hoy (y tiene start_date hace 30 días), solo debe correr 1 vez (el presente).
+NO debe correr 4 veces para "recuperar" las 4 semanas pasadas, porque no hay nada que recuperar:
+es full refresh, borra todo y recarga todo cada vez. El pasado no existe para este DAG.
 
-3. DAG: SCD Type 2 Historical Pipeline
-   - dag_id: 'catchup_challenge_scd_type2'
-   - schedule: '@daily'
-   - start_date: 14 días atrás
-   - catchup: ¿True o False? (decide y justifica)
-   - Tags: incluir 'challenge', 'dag_runs', 'catchup', 'scd'
-   
-   Pipeline (9 tareas mínimo):
-   - start
-   - extract_source_snapshot (snapshot completo del día)
-   - extract_current_dimension (estado actual en warehouse)
-   - identify_new_records
-   - identify_changed_records
-   - close_old_versions (set valid_to date)
-   - insert_new_versions (set valid_from date)
-   - insert_new_records
-   - validate_history_integrity
-   - end
-   
-   Doc_md debe explicar:
-   - ¿Por qué elegiste catchup=True o False?
-   - ¿Qué pasa si omites un día en SCD Type 2?
-   - ¿Puedes reconstruir el histórico correcto con backfill?
+**El flujo (full refresh):**
+`start` >> `truncate_products_table` (BashOperator - borra TODA la tabla products) >>
+`extract_from_source_system` (BashOperator - extrae estado actual completo desde Oracle) >>
+`validate_completeness` (BashOperator - verifica que trajo 100% de registros esperados) >>
+`load_to_warehouse` (BashOperator - inserta bulk de 1 millón de productos) >>
+`rebuild_indexes` (BashOperator - recrea índices y estadísticas) >>
+`notify_refresh_complete` (BashOperator - notifica a equipo de analytics) >> `end`
 
-RESTRICCIONES:
-- Usar ÚNICAMENTE: BashOperator, EmptyOperator
-- CADA DAG debe tener configuración de catchup explícita
-- Los bash_command deben mostrar el uso de {{ ds }}, {{ logical_date }}
-- Incluir doc_md explicando la decisión de catchup
+**Configuración DAG 1:**
+- DAG ID: `catchup_challenge_full_refresh`
+- Schedule: `0 0 * * 1` (cada lunes a las 00:00)
+- Start date: 30 días atrás desde hoy
+- **Catchup: False** (crítico! solo corre el presente)
+- Tags: `['challenge', 'catchup', 'full_refresh']`
 
-DECISIONES TÉCNICAS A JUSTIFICAR:
-Para CADA DAG, en el doc_md debes responder:
-1. ¿Por qué elegiste catchup=True o False?
-2. ¿Qué sucede si el DAG se desactiva por 1 mes y luego se reactiva?
-3. ¿Tu pipeline puede procesar datos históricos correctamente?
-4. ¿Prefieres catchup automático o backfill manual? ¿Por qué?
+---
 
-PUNTOS EXTRA:
-- Usar {{ data_interval_start }} y {{ data_interval_end }} apropiadamente
-- Mostrar validaciones de datos para cada tipo de carga
-- Explicar estrategia de idempotencia
-- Considerar impacto en scheduler y recursos
+**DAG 2: Incremental (catchup=True)**
 
-EJEMPLO DE DECISIÓN:
-```python
-# Full Refresh: probablemente catchup=False
-# Razón: No tiene sentido ejecutar 30 full refreshes históricos,
-# solo el más reciente importa. Los anteriores serían sobrescritos.
+`catchup_challenge_incremental` - Ejecuta cada hora, start_date hace 7 días.
 
-# Incremental: probablemente catchup=True
-# Razón: Cada día tiene datos únicos que deben cargarse.
-# Si omites un día, pierdes esos datos.
-```
+El propósito: procesa transacciones hora por hora. Cada hora es un batch independiente.
+Si el sistema estuvo apagado, necesitas "recuperar" todas las horas perdidas.
 
-No implementes la lógica real de base de datos, solo simula con echo
-mostrando los conceptos correctos.
+**Por qué catchup=True:**
+Si activas este DAG hoy (y tiene start_date hace 7 días), debe correr 168 veces (7 días × 24 horas)
+para recuperar TODAS las horas faltantes. Cada hora tiene transacciones únicas que no puedes
+perder. Es incremental: procesa solo lo nuevo de cada hora.
+
+**El flujo (incremental):**
+`start` >> `identify_hour_to_process` (BashOperator - usa {{ logical_date }} para saber qué hora procesar) >>
+`extract_transactions_for_hour` (BashOperator - extrae solo transacciones de esa hora específica) >>
+`filter_duplicates` (BashOperator - verifica que no existan ya en warehouse con mismo timestamp) >>
+`calculate_hourly_aggregations` (BashOperator - suma ventas, cuenta transacciones de esa hora) >>
+`append_to_warehouse` (BashOperator - INSERT incremental, no DELETE) >>
+`update_watermark` (BashOperator - marca que esta hora ya fue procesada) >>
+`send_hourly_report` (BashOperator - envía métrica de esa hora a monitoring) >> `end`
+
+**Configuración DAG 2:**
+- DAG ID: `catchup_challenge_incremental`
+- Schedule: `0 * * * *` (cada hora en punto: 00:00, 01:00, 02:00...)
+- Start date: 7 días atrás desde hoy
+- **Catchup: True** (crítico! recupera todas las horas faltantes)
+- **max_active_runs: 3** (procesa máximo 3 horas en paralelo para no saturar)
+- Tags: `['challenge', 'catchup', 'incremental']`
+
+---
+
+**Diferencias clave (debes demostrar que entiendes):**
+
+| Aspecto | Full Refresh (catchup=False) | Incremental (catchup=True) |
+|---------|------------------------------|----------------------------|
+| Filosofía | Reemplaza todo cada vez | Agrega solo lo nuevo |
+| Historia | No le importa el pasado | Recupera cada período faltante |
+| Operación | TRUNCATE + INSERT | INSERT incremental |
+| Si estuvo apagado | Solo corre 1 vez (ahora) | Corre N veces (recupera todo) |
+| Idempotencia | No necesita (borra todo) | Crítica (filter_duplicates) |
+| Uso de logical_date | No importa la fecha | Crítico para saber qué procesar |
+
+**Configuración técnica general:**
+- Ambos DAGs en el mismo archivo
+- Usa `datetime.datetime.now() - datetime.timedelta(days=N)` para calcular start_date
+- Full refresh: schedule semanal, start_date 30 días atrás
+- Incremental: schedule horario, start_date 7 días atrás, max_active_runs=3
 """
 
 import datetime
@@ -119,5 +89,4 @@ from airflow.sdk import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-# TODO: Implementa los 3 DAGs según los requisitos
-# Recuerda justificar cada decisión de catchup en el doc_md
+# TODO: Crea ambos pipelines con estrategias opuestas de catchup

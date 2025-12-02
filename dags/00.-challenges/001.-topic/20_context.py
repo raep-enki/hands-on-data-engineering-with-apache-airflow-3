@@ -1,183 +1,196 @@
 """
-Challenge: Sistema ETL Configurable con Context
+Challenge: Pipeline Que Se Adapta a Cada Ejecución
 
-Objetivo:
-=========
-Crear UN ÚNICO DAG que implemente un ETL completo usando TaskFlow API
-con configuración runtime, context variables, y manejo de fechas.
+Tienes un pipeline ETL que debe comportarse diferente según cómo lo ejecutes. A veces quieres
+procesar en modo "development" (rápido, sample de datos), a veces en "production" (completo,
+validaciones exhaustivas). A veces extraes de API, a veces de S3, a veces de base de datos.
+A veces procesas 100 registros, a veces 10,000.
 
-Requisitos:
-===========
+Todas esas decisiones deben tomarse en **runtime** cuando "triggeas" el DAG manualmente desde la UI,
+no hardcodeadas en el código. Es como una función con parámetros: mismo código, comportamiento
+diferente según los inputs.
 
-1. DAG: 'context_challenge'
-   - Schedule: @hourly
-   - Catchup: False
-   - Tags: ['challenge', 'core_concepts', 'task_flow', 'context']
+Además, necesitas acceder a **información del contexto de Airflow**: ¿qué fecha se está procesando?
+¿cuál es el intervalo de tiempo? ¿en qué run estamos? Son datos que Airflow te da automáticamente
+en el `context` de cada tarea.
 
-2. Runtime Configuration (dag_run.conf):
-   El DAG debe aceptar la siguiente configuración opcional:
-   
-   - environment: 'development' | 'staging' | 'production' (default: 'production')
-   - data_source: 'api' | 'database' | 's3' (default: 'api')
-   - batch_size: integer > 0 (default: 1000)
-   - enable_validation: boolean (default: True)
-   - enable_enrichment: boolean (default: True)
-   - target_format: 'json' | 'parquet' | 'csv' (default: 'parquet')
+**Este es el PRIMER challenge que usa TaskFlow API (@task)**, que simplifica trabajar con context.
 
-3. Estructura del pipeline (6 tareas @task):
+**El flujo con contexto dinámico:**
 
-   A. validate_configuration:
-      - Accede a **context para obtener dag_run.conf
-      - Valida que todos los valores sean correctos:
-        * environment en ['development', 'staging', 'production']
-        * data_source en ['api', 'database', 's3']
-        * batch_size > 0
-        * target_format en ['json', 'parquet', 'csv']
-      - Si inválido, raise ValueError con mensaje descriptivo
-      - Si válido, retorna config completo con defaults aplicados
-   
-   B. extract_data:
-      - Recibe config de validate_configuration
-      - Recibe logical_date y data_interval_start/end del context
-      - Simula extracción según data_source:
-        * api: "Calling API for {date}"
-        * database: "Querying DB for interval {start} to {end}"
-        * s3: "Reading S3 files for {date}"
-      - Usa batch_size para limitar registros
-      - Retorna dict con:
-        * records: lista simulada de N registros (N = batch_size)
-        * source: data_source usado
-        * extraction_time: str(datetime.now())
-        * data_date: str(logical_date)
-      - Usa ti.xcom_push para guardar metadata:
-        * key='extract_metadata'
-        * value: {source, record_count, extraction_time}
-   
-   C. conditional_validation:
-      - Recibe extracted_data
-      - Recibe config
-      - Solo valida si enable_validation=True
-      - Si False, retorna extracted_data sin cambios
-      - Si True:
-        * Imprime "Running validation checks..."
-        * Valida que hay registros
-        * Valida que todos tengan 'id' field
-        * Retorna extracted_data con campo validation_passed=True
-   
-   D. conditional_enrichment:
-      - Recibe validated_data
-      - Recibe config y logical_date del context
-      - Solo enriquece si enable_enrichment=True
-      - Si False, retorna validated_data sin cambios
-      - Si True:
-        * Imprime "Enriching data..."
-        * Agrega a cada record:
-          - processed_date: str(logical_date)
-          - environment: config['environment']
-        * Retorna data enriquecida
-   
-   E. generate_output_path:
-      - Recibe logical_date del context
-      - Recibe config
-      - Genera path particionado:
-        * Base: s3://data-lake/{environment}/
-        * Partición: year={year}/month={month}/day={day}/hour={hour}/
-        * Filename: data_{timestamp}.{target_format}
-      - Retorna dict con: {base_path, partition, filename, full_path}
-   
-   F. load_data:
-      - Recibe enriched_data
-      - Recibe output_path
-      - Recibe ti del context
-      - Pull extract_metadata del XCom
-      - Imprime resumen completo:
-        * Source: {data_source}
-        * Records: {count}
-        * Output: {full_path}
-        * Format: {target_format}
-        * Extraction time: {extraction_time}
-      - Retorna dict con:
-        * status: 'success'
-        * records_loaded: count
-        * output_path: full_path
-        * metadata: extract_metadata from XCom
+**Task 1: Leer configuración runtime**
+```python
+@task(task_id='read_runtime_config')
+def read_config(**context):
+    # Leer parámetros pasados al triggear el DAG
+    dag_run = context['dag_run']
+    conf = dag_run.conf or {}  # dag_run.conf contiene params del trigger
+    
+    env = conf.get('environment', 'development')  # default: dev
+    source = conf.get('data_source', 's3')        # default: s3
+    limit = conf.get('record_limit', 100)         # default: 100
+    
+    print(f"Running in {env} mode, source: {source}, limit: {limit}")
+    return {'env': env, 'source': source, 'limit': limit}
+```
 
-4. Dependencias:
-   validate_configuration >> extract_data >> conditional_validation >> 
-   conditional_enrichment >> load_data
-   
-   generate_output_path se ejecuta en paralelo y converge en load_data:
-   validate_configuration >> generate_output_path >> load_data
+**Task 2: Acceder a fechas del context**
+```python
+@task(task_id='process_date_range')
+def process_dates(**context):
+    # Airflow provee automáticamente estas variables
+    logical_date = context['logical_date']  # Fecha lógica del run
+    data_interval_start = context['data_interval_start']  # Inicio del intervalo
+    data_interval_end = context['data_interval_end']      # Fin del intervalo
+    
+    print(f"Processing data from {data_interval_start} to {data_interval_end}")
+    print(f"Logical date: {logical_date}")
+    
+    # Formatear para queries
+    start_str = data_interval_start.strftime('%Y-%m-%d %H:%M:%S')
+    end_str = data_interval_end.strftime('%Y-%m-%d %H:%M:%S')
+    
+    return {'start': start_str, 'end': end_str}
+```
 
-5. Documentación:
-   - DAG doc_md que explique:
-     * Configuraciones aceptadas con tipos y defaults
-     * Ejemplo de trigger con cada configuración
-     * Cómo las tareas usan logical_date
-     * Qué metadata se guarda en XCom
-     * Lógica condicional (validation/enrichment)
+**Task 3: Acceder a metadata del run**
+```python
+@task(task_id='get_run_metadata')
+def get_metadata(**context):
+    # Metadata del DAG run
+    run_id = context['run_id']              # ID único del run
+    dag_id = context['dag'].dag_id          # Nombre del DAG
+    task_id = context['task_instance'].task_id  # Nombre de la tarea
+    
+    print(f"DAG: {dag_id}, Run: {run_id}, Task: {task_id}")
+    
+    # Info útil para logging y debugging
+    return {'run_id': run_id, 'dag_id': dag_id, 'task_id': task_id}
+```
 
-Restricciones:
-==============
-- Usar SOLO @task decorator (TaskFlow API)
-- Acceder a context con parámetros específicos o **context
-- Un solo DAG en el archivo
-- Simular datos (no conexiones reales)
-- Todos los prints deben tener emojis descriptivos
+**Task 4: Extracción adaptativa**
+```python
+@task(task_id='extract_data_adaptive')
+def extract_data(config, **context):
+    # Usa la config runtime para decidir de dónde extraer
+    source = config['source']
+    limit = config['limit']
+    env = config['env']
+    
+    if source == 's3':
+        print(f"Extracting from S3 with limit {limit}")
+        query = f"SELECT * FROM s3_bucket LIMIT {limit}"
+    elif source == 'api':
+        print(f"Extracting from API with limit {limit}")
+        query = f"GET /api/data?limit={limit}"
+    elif source == 'database':
+        print(f"Extracting from database with limit {limit}")
+        query = f"SELECT * FROM transactions LIMIT {limit}"
+    
+    # En dev, usa sample. En prod, usa todo
+    if env == 'development':
+        print("DEV MODE: Using sample data for speed")
+    else:
+        print("PROD MODE: Full validation and processing")
+    
+    return {'query': query, 'row_count': limit}
+```
 
-Estructura de datos:
-====================
-Records simulados deben ser:
-[
-  {"id": 1, "value": 100, "status": "active"},
-  {"id": 2, "value": 200, "status": "active"},
-  ...
-]
+**Task 5: Transformación condicional**
+```python
+@task(task_id='transform_conditional')
+def transform_data(config, extract_result, date_range, **context):
+    env = config['env']
+    row_count = extract_result['row_count']
+    
+    print(f"Transforming {row_count} rows for period {date_range['start']} - {date_range['end']}")
+    
+    if env == 'production':
+        # Validaciones exhaustivas en prod
+        print("Running: schema validation, null checks, duplicate detection, outlier removal")
+    else:
+        # Validaciones mínimas en dev
+        print("Running: basic schema validation only")
+    
+    return {'transformed_rows': row_count, 'quality_score': 0.95}
+```
 
-Tips:
-=====
-- Para simular N records: [{"id": i, "value": i*100, "status": "active"} for i in range(1, batch_size+1)]
-- logical_date.hour para la hora en el path particionado
-- config.get('key', default) para valores con defaults
-- Validación debe raise ValueError si detecta problema
-- XCom push manual para metadata, return para datos principales
-- Tareas condicionales usan if/else basándose en config
+**Task 6: Reporte con contexto completo**
+```python
+@task(task_id='generate_context_report')
+def generate_report(config, metadata, transform_result, **context):
+    # Combina toda la info del contexto en un reporte
+    report = f"""
+    PIPELINE EXECUTION REPORT
+    ========================
+    Run ID: {metadata['run_id']}
+    DAG: {metadata['dag_id']}
+    Environment: {config['env']}
+    Data Source: {config['source']}
+    Rows Processed: {transform_result['transformed_rows']}
+    Quality Score: {transform_result['quality_score']}
+    Logical Date: {context['logical_date']}
+    Duration: {context.get('task_instance').duration} seconds
+    """
+    print(report)
+    return report
+```
 
-Evaluación:
-===========
-- ✅ Validación correcta de configuración
-- ✅ Uso apropiado de logical_date y data_interval
-- ✅ XCom manual para metadata
-- ✅ Returns para paso de datos principal
-- ✅ Lógica condicional funcionando
-- ✅ Particionado temporal correcto
-- ✅ Context access variado (**context, params específicos)
-- ✅ Documentación completa
+**Flujo completo con TaskFlow API:**
 
-Ejemplo de trigger:
-===================
-# Default (todo production):
-airflow dags trigger context_challenge
+```python
+with DAG(
+    dag_id='context_challenge',
+    schedule='@hourly',
+    start_date=datetime.datetime(2024, 1, 1),
+    catchup=False,
+    tags=['challenge', 'context', 'taskflow']
+) as dag:
+    config = read_config()
+    dates = process_dates()
+    metadata = get_metadata()
+    
+    extracted = extract_data(config)
+    transformed = transform_data(config, extracted, dates)
+    report = generate_report(config, metadata, transformed)
+```
 
-# Development con validación deshabilitada:
-airflow dags trigger context_challenge --conf '{
-  "environment": "development",
-  "data_source": "database",
-  "batch_size": 100,
-  "enable_validation": false,
-  "target_format": "json"
-}'
+**Cómo triggear con parámetros desde la UI:**
 
-# Staging con todo habilitado:
-airflow dags trigger context_challenge --conf '{
-  "environment": "staging",
-  "data_source": "s3",
-  "batch_size": 5000,
-  "enable_validation": true,
-  "enable_enrichment": true,
-  "target_format": "parquet"
-}'
+Cuando triggeas manualmente desde Airflow UI, puedes pasar JSON:
+```json
+{
+  "environment": "production",
+  "data_source": "api",
+  "record_limit": 10000
+}
+```
+
+O desde CLI:
+```bash
+airflow dags trigger context_challenge --conf '{"environment":"production","data_source":"database","record_limit":50000}'
+```
+
+**Context variables disponibles (principales):**
+- `logical_date`: Fecha lógica del run
+- `data_interval_start/end`: Intervalo de datos a procesar
+- `run_id`: ID único del run
+- `dag_run`: Objeto con info del run (incluye .conf para params)
+- `task_instance`: Info de la tarea actual
+- `dag`: Objeto DAG con metadata
+
+**Configuración técnica:**
+- DAG ID: `context_challenge`
+- Schedule: @hourly
+- Start date: 2024-01-01
+- Catchup: False
+- Tags: `['challenge', 'context', 'taskflow']`
+- 6 funciones @task que usan **context y dag_run.conf
+- Demuestra: runtime config, fechas, metadata, transformación adaptativa
 """
 
-# TU CÓDIGO AQUÍ
-# Implementa el DAG siguiendo las especificaciones anteriores
+import datetime
+
+from airflow.sdk import DAG, task
+
+# TODO: Define funciones @task que usen **context y dag_run.conf
