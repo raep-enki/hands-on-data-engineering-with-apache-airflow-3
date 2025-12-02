@@ -108,8 +108,10 @@ with DAG(
     # Etapa 1
     start >> [init_workspace, check_prerequisites]
     
-    # Etapa 2
-    [init_workspace, check_prerequisites] >> [ingest_customers, ingest_orders, ingest_products]
+    # Etapa 2: Fan-out desde múltiples tareas a múltiples tareas
+    for prep_task in [init_workspace, check_prerequisites]:
+        for ingest_task in [ingest_customers, ingest_orders, ingest_products]:
+            prep_task >> ingest_task
     
     # Etapa 3
     ingest_customers >> validate_customers
