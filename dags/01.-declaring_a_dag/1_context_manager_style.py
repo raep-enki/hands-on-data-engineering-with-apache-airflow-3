@@ -21,28 +21,28 @@ with DAG(
     tags=['example', 'declaring_a_dag']
 ):
     # Tarea de inicio - marca el comienzo del pipeline
-    start = EmptyOperator(task_id='start')
+    start_task = EmptyOperator(task_id='start')
     
     # Extraer - simular extracción de datos
-    extract = BashOperator(
+    extract_task = BashOperator(
         task_id='extract_data',
         bash_command='echo "Extrayendo datos del sistema origen"'
     )
     
     # Transformar - simular transformación de datos
-    transform = BashOperator(
+    transform_task = BashOperator(
         task_id='transform_data',
         bash_command='echo "Transformando datos: limpieza, filtrado, enriquecimiento"'
     )
     
     # Cargar - simular carga de datos
-    load = BashOperator(
+    load_task = BashOperator(
         task_id='load_data',
         bash_command='echo "Cargando datos al almacén destino"'
     )
     
     # Tarea final - marca la finalización
-    end = EmptyOperator(task_id='end')
+    end_task = EmptyOperator(task_id='end')
     
     # Definir dependencias de tareas - pipeline lineal
-    start >> extract >> transform >> load >> end
+    start_task >> extract_task >> transform_task >> load_task >> end_task
